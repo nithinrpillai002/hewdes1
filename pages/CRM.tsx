@@ -90,6 +90,9 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
     e.preventDefault();
     if (!inputMessage.trim() || isTyping) return;
 
+    // Use key from settings or empty string (server will use fallback)
+    const apiKey = localStorage.getItem('kie_api_key') || '';
+
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -111,7 +114,8 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
       userMsg.content, 
       products, 
       platformRules, 
-      platformLabel
+      platformLabel,
+      apiKey
     );
 
     if (response.actionTaken) {
@@ -554,6 +558,13 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
                 )}
             </div>
 
+            {/* Simulation Chat */}
+            <div className="flex justify-center p-4">
+                 <p className="text-center text-[10px] text-slate-400">
+                    AI Agent connected via KIE Gemini 3 Flash API.
+                </p>
+            </div>
+
         </div>
       </div>
 
@@ -633,9 +644,6 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
                     <Send size={20} />
                 </button>
             </form>
-            <p className="text-center text-[10px] text-slate-400 mt-2">
-                Simulating KIE API Logic Engine.
-            </p>
         </div>
       </div>
     </div>

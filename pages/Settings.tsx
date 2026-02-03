@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ShieldCheck, Moon, Sun, Activity, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Server, PlayCircle, Wifi, WifiOff, Cloud } from 'lucide-react';
+import { ShieldCheck, Moon, Sun, Activity, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Server, PlayCircle, Wifi, WifiOff, Cloud, Key } from 'lucide-react';
 import { SystemLog } from '../types';
 
 interface SettingsProps {
@@ -15,6 +15,30 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
   // Server Status State
   const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [simulating, setSimulating] = useState(false);
+
+  // KIE API Key State
+  const [kieApiKey, setKieApiKey] = useState(() => {
+    if (typeof window !== 'undefined') {
+        // Pre-fill with the known key if empty, to help the user start immediately
+        const existing = localStorage.getItem('kie_api_key');
+        if (existing) return existing;
+        return '3a748f6c1558e84cf2ca54b22c393832'; 
+    }
+    return '3a748f6c1558e84cf2ca54b22c393832';
+  });
+  const [showKey, setShowKey] = useState(false);
+
+  // Initialize the key in local storage if not present
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !localStorage.getItem('kie_api_key')) {
+        localStorage.setItem('kie_api_key', '3a748f6c1558e84cf2ca54b22c393832');
+    }
+  }, []);
+
+  const handleSaveKey = () => {
+    localStorage.setItem('kie_api_key', kieApiKey);
+    alert('API Key Saved!');
+  };
 
   const checkServerStatus = async () => {
     setServerStatus('checking');
@@ -144,11 +168,57 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
       </div>
 
       <div className="space-y-6">
+        
+        {/* AI Configuration */}
+        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
+             <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                    <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                        <Key size={24} />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-slate-800 dark:text-white">AI Configuration (KIE API)</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Manage your connection to Gemini 3 Flash</p>
+                    </div>
+                </div>
+            </div>
+            <div className="p-8">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">KIE API Key</label>
+                <div className="flex space-x-2">
+                    <div className="relative flex-1">
+                        <input 
+                            type={showKey ? "text" : "password"}
+                            value={kieApiKey}
+                            onChange={(e) => setKieApiKey(e.target.value)}
+                            placeholder="sk-..."
+                            className="w-full px-4 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
+                        <button 
+                            type="button"
+                            onClick={() => setShowKey(!showKey)}
+                            className="absolute right-3 top-2.5 text-xs text-slate-500 hover:text-indigo-600"
+                        >
+                            {showKey ? 'Hide' : 'Show'}
+                        </button>
+                    </div>
+                    <button 
+                        onClick={handleSaveKey}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm transition-colors"
+                    >
+                        Save Key
+                    </button>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">
+                    Get your key from <a href="https://kie.ai/api-key" target="_blank" className="text-indigo-500 hover:underline">kie.ai/api-key</a>. This key is stored locally in your browser and sent securely to the backend.
+                </p>
+            </div>
+        </div>
+
         {/* Appearance Settings */}
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
             <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
             <div className="flex items-center space-x-3">
-                <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                <div className="p-2 bg-slate-100 dark:bg-slate-900/30 text-slate-600 dark:text-slate-400 rounded-lg">
                     {darkMode ? <Moon size={24} /> : <Sun size={24} />}
                 </div>
                 <div>

@@ -5,7 +5,8 @@ export const generateAIResponse = async (
   currentMessage: string,
   products: Product[],
   rules: AiRule[],
-  platform: 'WhatsApp' | 'Instagram'
+  platform: 'WhatsApp' | 'Instagram',
+  apiKey: string
 ): Promise<{ text: string; actionTaken?: string }> => {
   
   try {
@@ -19,12 +20,14 @@ export const generateAIResponse = async (
         currentMessage,
         products,
         rules,
-        platform
+        platform,
+        apiKey // Pass the Key
       }),
     });
 
     if (!response.ok) {
-      throw new Error(`Server responded with ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.text || `Server responded with ${response.status}`);
     }
 
     const data = await response.json();
@@ -33,8 +36,8 @@ export const generateAIResponse = async (
       actionTaken: data.actionTaken
     };
 
-  } catch (e) {
+  } catch (e: any) {
     console.error("AI Service Error:", e);
-    return { text: "I'm having trouble connecting to the server right now. Please try again later.", actionTaken: "Network Error" };
+    return { text: `System Error: ${e.message}`, actionTaken: "Error" };
   }
 };

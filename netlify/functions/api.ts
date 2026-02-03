@@ -4,9 +4,6 @@ import serverless from 'serverless-http';
 const api = express();
 const router = Router();
 
-// --- KIE API CONFIG ---
-const KIE_API_KEY = "3a748f6c1558e84cf2ca54b22c393832";
-
 // --- IN-MEMORY LOGGING ---
 let systemLogs: any[] = [];
 const MAX_LOGS = 50;
@@ -28,19 +25,18 @@ const addSystemLog = (method: string, url: string, status: number, outcome: stri
 };
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'hewdes_rttf0kd11o1axrmc';
+const HARDCODED_KIE_KEY = '3a748f6c1558e84cf2ca54b22c393832';
 
-// --- Mock Delivery API (Indian Context) ---
+// --- Local Helper Functions for Tools ---
 const checkDeliveryAPI = async (pincode: string): Promise<string> => {
   // Simulate network delay
   await new Promise(resolve => setTimeout(resolve, 800));
   
-  // Basic validation for Indian Pincode (6 digits)
   const validPincode = /^[1-9][0-9]{5}$/.test(pincode);
   if (!validPincode) {
     return "That doesn't look like a valid pincode. Could you please double-check? It should be 6 digits.";
   }
   
-  // Simulate delivery estimates based on region (first digit)
   const regionDigit = parseInt(pincode[0]);
   let days = 3;
   let regionName = "Metro City";
@@ -59,138 +55,228 @@ const checkDeliveryAPI = async (pincode: string): Promise<string> => {
   return `Good news, we service ${regionName}! If you order now, it should reach you by ${formattedDate} (approx ${days} days).`;
 };
 
-// --- LOGIC ENGINE (Replaces GenAI) ---
-const processKieLogic = async (message: string, products: any[], rules: any[], platform: string) => {
-    const lowerMsg = message.toLowerCase();
+// --- KIE API Integration ---
+async function callKieGemini(messages: any[], apiKey: string) {
+    // UPDATED: Using Gemini 3 Flash endpoint
+    const KIE_ENDPOINT = "https://api.kie.ai/gemini-3-flash/v1/chat/completions";
     
-    // 1. Delivery Check (Pincode)
-    const pincodeMatch = message.match(/\b[1-9][0-9]{5}\b/);
-    if (pincodeMatch) {
-        const result = await checkDeliveryAPI(pincodeMatch[0]);
-        return { text: result, action: `Checked Pincode: ${pincodeMatch[0]}` };
-    }
-    if (lowerMsg.includes('delivery') || lowerMsg.includes('ship') || lowerMsg.includes('reach')) {
-        return { text: "I can check that for you! Could you please share your 6-digit pincode?", action: "Requested Pincode" };
-    }
-
-    // 2. Product Inquiry
-    if (products && products.length > 0) {
-        const foundProduct = products.find((p: any) => lowerMsg.includes(p.name.toLowerCase()) || lowerMsg.includes(p.category.toLowerCase()));
-        if (foundProduct) {
-            return { 
-                text: `Yes, we have the ${foundProduct.name}! It costs ₹${foundProduct.price}. ${foundProduct.description}`, 
-                action: `Found Product: ${foundProduct.name}`
-            };
+    // Define Tools according to KIE Docs
+    const tools = [
+        {
+            type: "function",
+            function: {
+                name: "checkDelivery",
+                description: "Checks delivery availability and estimated delivery date for a given Indian pincode.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        pincode: {
+                            type: "string",
+                            description: "The 6-digit pincode of the customer's location in India."
+                        }
+                    },
+                    required: ["pincode"]
+                }
+            }
+        },
+        {
+            type: "function",
+            function: {
+                name: "escalateToHuman",
+                description: "Escalates the conversation to a human agent via email notification if the AI cannot answer.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        reason: { type: "string", description: "Reason for escalation" },
+                        summary: { type: "string", description: "Summary of user query" }
+                    },
+                    required: ["reason", "summary"]
+                }
+            }
         }
-    }
-    
-    // 3. Escalation
-    if (lowerMsg.includes('human') || lowerMsg.includes('support') || lowerMsg.includes('talk to person') || lowerMsg.includes('help')) {
-        addSystemLog('POST', '/api/chat', 200, `Escalation Triggered`, platform, { reason: 'User requested support' });
-        return { text: "I've notified a human agent to take over. They will contact you shortly via email.", action: "Escalated to Human" };
-    }
+    ];
 
-    // 4. Greetings
-    if (lowerMsg.includes('hi') || lowerMsg.includes('hello') || lowerMsg.includes('hey')) {
-        return { text: `Hello! Welcome to Hewdes Gifts on ${platform === 'whatsapp' ? 'WhatsApp' : 'Instagram'}. How can I help you pick the perfect gift today? 🎁`, action: null };
-    }
+    try {
+        const response = await fetch(KIE_ENDPOINT, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                messages: messages,
+                tools: tools,
+                stream: false
+            })
+        });
 
-    // 5. Default / Fallback (using rules)
-    const activeRules = rules ? rules.filter((r: any) => r.isActive) : [];
-    if (activeRules.length > 0) {
-        // Simple fallback to the first instruction rule just to show customization
-        const instruction = activeRules.find((r: any) => r.type === 'instruction');
-        if (instruction) {
-             return { text: `I'm here to help! ${instruction.content}`, action: null };
+        if (!response.ok) {
+            const err = await response.text();
+            console.error("KIE API Error:", err);
+            throw new Error(`KIE API Error: ${response.status} ${err}`);
         }
+
+        return await response.json();
+    } catch (error) {
+        throw error;
     }
+}
 
-    return { text: "I'm your Hewdes Gifts assistant. You can ask me about our products, check delivery times with your pincode, or ask for gift ideas!", action: null };
-};
-
-// --- ROUTES ---
-
-router.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', message: 'Hewdes CRM (Netlify Function) is Running' });
-});
-
-router.get('/logs', (req, res) => {
-  res.json(systemLogs);
-});
-
-// Chat Endpoint
+// --- Chat Endpoint ---
 router.post('/chat', async (req, res) => {
   try {
-    const { history, currentMessage, products, rules, platform } = req.body;
+    const { history, currentMessage, products, rules, platform, apiKey } = req.body;
 
-    // Validate KIE Token (Hardcoded check as requested)
-    if (KIE_API_KEY !== "3a748f6c1558e84cf2ca54b22c393832") {
-         console.error("Invalid KIE API Configuration");
-         return res.status(500).json({ text: "System Configuration Error." });
+    // Use passed key or fallback to hardcoded
+    const effectiveApiKey = apiKey || HARDCODED_KIE_KEY;
+
+    if (!effectiveApiKey) {
+        return res.status(500).json({ text: "Server Configuration Error: No API Key available." });
     }
 
-    const response = await processKieLogic(currentMessage, products, rules, platform);
+    // 1. Construct System Instruction (Developer Role)
+    const productCatalog = products ? products.map((p: any) => 
+      `ITEM: ${p.name} (ID: ${p.id}) | PRICE: ₹${p.price} | DETAILS: ${p.description} | STOCK: ${p.inStock ? 'Yes' : 'No'}`
+    ).join('\n') : '';
+
+    const activeRules = rules ? rules.filter((r: any) => r.isActive).map((r: any) => `- ${r.content}`).join('\n') : '';
+
+    const systemMessage = {
+        role: "developer",
+        content: [
+            {
+                type: "text",
+                text: `You are a helpful assistant for "Hewdes Gifts" on ${platform}.
+                GOAL: Help customers buy gifts. Be friendly, use emojis.
+                
+                PRODUCTS:
+                ${productCatalog}
+                
+                RULES:
+                ${activeRules}
+                
+                If asked about delivery, ALWAYS ask for a pincode and use the checkDelivery tool.
+                If you cannot help, use escalateToHuman.`
+            }
+        ]
+    };
+
+    // 2. Construct Conversation History
+    // Map internal history format to KIE format
+    const conversationMessages = history
+        .filter((msg: any) => msg.role === 'user' || msg.role === 'model' || msg.role === 'assistant')
+        .map((msg: any) => ({
+            role: msg.role === 'model' ? 'assistant' : msg.role,
+            content: [{ type: "text", text: msg.content }]
+        }));
+
+    // Add current user message
+    conversationMessages.push({
+        role: "user",
+        content: [{ type: "text", text: currentMessage }]
+    });
+
+    // Full payload
+    const payload = [systemMessage, ...conversationMessages];
+
+    // 3. First Call to KIE
+    let kieResponse = await callKieGemini(payload, effectiveApiKey);
     
-    res.json({ text: response.text, actionTaken: response.action });
+    // Check for Tool Calls
+    const choice = kieResponse.choices[0];
+    const message = choice.message;
+    let finalAction = undefined;
+
+    // Handle Tool Calls (if any)
+    if (choice.finish_reason === "tool_calls" || message.tool_calls) {
+        // Add the assistant's "thinking" step (the tool call request) to history
+        payload.push(message);
+
+        for (const toolCall of message.tool_calls) {
+            const functionName = toolCall.function.name;
+            const args = JSON.parse(toolCall.function.arguments);
+            let toolResult = "";
+
+            if (functionName === "checkDelivery") {
+                finalAction = `Checking Pincode: ${args.pincode}`;
+                toolResult = await checkDeliveryAPI(args.pincode);
+            } else if (functionName === "escalateToHuman") {
+                finalAction = `Escalating: ${args.reason}`;
+                toolResult = "Support ticket created. Agent notified.";
+                addSystemLog('POST', '/api/chat', 200, 'Escalation', platform, args);
+            }
+
+            // Append Tool Result to history
+            payload.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: [{ type: "text", text: toolResult }] // Tool results are text
+            });
+        }
+
+        // 4. Second Call to KIE (with tool results)
+        kieResponse = await callKieGemini(payload, effectiveApiKey);
+    }
+
+    // Extract final text
+    const finalContent = kieResponse.choices[0].message.content;
+    let textResponse = "";
+    if (typeof finalContent === 'string') {
+        textResponse = finalContent;
+    } else if (Array.isArray(finalContent)) {
+        textResponse = finalContent.map((c: any) => c.text).join(' ');
+    } else {
+        textResponse = "Received response in unexpected format.";
+    }
+
+    res.json({ text: textResponse, actionTaken: finalAction });
 
   } catch (e: any) {
     console.error("Error in Backend:", e);
-    res.status(500).json({ text: "Sorry, I'm having trouble connecting right now.", actionTaken: "Backend Error" });
+    const msg = e.message || "Unknown error";
+    res.status(500).json({ text: "Sorry, I'm having trouble connecting to the AI brain right now.", actionTaken: "API Error" });
   }
 });
 
-// Webhook Verification (Instagram)
+// --- Standard Webhooks (Unchanged) ---
+router.get('/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM (Netlify Function) is Running' }));
+router.get('/logs', (req, res) => res.json(systemLogs));
+
 router.get('/webhook/instagram', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-
-  if (mode && token) {
-    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+  if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
       addSystemLog('GET', '/webhook/instagram', 200, 'Verification Success', 'instagram', req.query);
       res.status(200).send(challenge);
-    } else {
-      addSystemLog('GET', '/webhook/instagram', 403, 'Verification Failed', 'instagram', req.query);
-      res.sendStatus(403);
-    }
   } else {
-    res.sendStatus(400);
+      res.sendStatus(403);
   }
 });
 
-// Webhook Event (Instagram)
 router.post('/webhook/instagram', (req, res) => {
   addSystemLog('POST', '/webhook/instagram', 200, 'Event Received', 'instagram', req.body);
   res.status(200).send('EVENT_RECEIVED');
 });
 
-// Webhook Verification (WhatsApp)
 router.get('/webhook/whatsapp', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-
-  if (mode && token) {
-    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+  if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
       addSystemLog('GET', '/webhook/whatsapp', 200, 'Verification Success', 'whatsapp', req.query);
       res.status(200).send(challenge);
-    } else {
-      addSystemLog('GET', '/webhook/whatsapp', 403, 'Verification Failed', 'whatsapp', req.query);
-      res.sendStatus(403);
-    }
   } else {
-    res.sendStatus(400);
+      res.sendStatus(403);
   }
 });
 
-// Webhook Event (WhatsApp)
 router.post('/webhook/whatsapp', (req, res) => {
   addSystemLog('POST', '/webhook/whatsapp', 200, 'Event Received', 'whatsapp', req.body);
   res.status(200).send('EVENT_RECEIVED');
 });
 
-// Mount router
-api.use('/api', router); // For /api/logs and /api/chat
-api.use('/', router);    // For /health and /webhook
+api.use('/api', router);
+api.use('/', router);
 
 export const handler = serverless(api);
