@@ -6,7 +6,6 @@ const api = express();
 const router = Router();
 
 // --- CRITICAL: Enable JSON Parsing ---
-// Fix: Cast middleware to any to avoid TypeScript overload mismatch errors with PathParams
 api.use(express.json() as any);
 api.use(express.urlencoded({ extended: true }) as any);
 
@@ -120,7 +119,6 @@ async function callKieGemini(messages: any[], apiKey: string) {
 // --- Chat Endpoint ---
 router.post('/chat', async (req, res) => {
   try {
-    // Add default values to destructuring
     const { history = [], currentMessage, products = [], rules = [], platform, apiKey } = req.body || {};
     const effectiveApiKey = apiKey || HARDCODED_KIE_KEY;
 
@@ -128,12 +126,10 @@ router.post('/chat', async (req, res) => {
         return res.status(500).json({ text: "Server Configuration Error: No API Key available." });
     }
 
-    // Safely map products
     const productCatalog = Array.isArray(products) ? products.map((p: any) => 
       `ITEM: ${p.name} | PRICE: ${p.price} | STOCK: ${p.inStock ? 'Yes' : 'No'}`
     ).join('\n') : '';
 
-    // Safely map rules
     const activeRules = Array.isArray(rules) ? rules.filter((r: any) => r.isActive).map((r: any) => `- ${r.content}`).join('\n') : '';
 
     const systemMessage = {
@@ -148,7 +144,6 @@ router.post('/chat', async (req, res) => {
         }]
     };
 
-    // Safely filter history
     const conversationMessages = Array.isArray(history) ? history
         .filter((msg: any) => ['user', 'model', 'assistant', 'tool'].includes(msg.role))
         .map((msg: any) => ({
@@ -158,7 +153,6 @@ router.post('/chat', async (req, res) => {
 
     conversationMessages.push({ role: "user", content: [{ type: "text", text: currentMessage }] });
 
-    // Fix: Explicitly type payload as any[] to allow objects with 'tool_call_id' without TS inference errors
     const payload: any[] = [systemMessage, ...conversationMessages];
 
     let kieResponse = await callKieGemini(payload, effectiveApiKey);
@@ -194,7 +188,6 @@ router.post('/chat', async (req, res) => {
     if (typeof finalContent === 'string') textResponse = finalContent;
     else if (Array.isArray(finalContent)) textResponse = finalContent.map((c: any) => c.text).join(' ');
 
-    // --- LOGGING ---
     addSystemLog('POST', '/api/chat', 200, 'Outgoing Chat & Response', platform || 'simulator', {
         input: currentMessage,
         response: textResponse,
@@ -212,43 +205,82 @@ router.post('/chat', async (req, res) => {
   }
 });
 
-// --- Standard Webhooks ---
+// --- Webhook Auto-Reply Logic ---
+const processWebhookMessage = async (platform: string, senderId: string, text: string) => {
+    if (!text || !senderId) return;
+
+    try {
+        const systemMessage = {
+            role: "developer",
+            content: [{ type: "text", text: "You are the automated assistant for Hewdes Gifts. Be helpful, concise, and friendly." }]
+        };
+        const userMessage = { role: "user", content: [{ type: "text", text }] };
+        
+        const kieResponse = await callKieGemini([systemMessage, userMessage], HARDCODED_KIE_KEY);
+        
+        let replyText = "Thank you for your message!";
+        const finalContent = kieResponse.choices?.[0]?.message?.content;
+        if (typeof finalContent === 'string') replyText = finalContent;
+        else if (Array.isArray(finalContent)) replyText = finalContent.map((c: any) => c.text).join(' ');
+
+        addSystemLog('POST', `https://graph.facebook.com/v19.0/me/messages`, 200, `AI Auto-Reply Sent (${platform})`, platform, {
+            recipient: senderId,
+            text: replyText,
+            note: "Simulated Send API Call"
+        });
+    } catch (e: any) {
+        addSystemLog('INTERNAL', 'processWebhookMessage', 500, 'Auto-Reply Failed', platform, { error: e.message });
+    }
+};
+
+const handleWebhookEvent = async (req: any, res: any, platform: string) => {
+  const body = req.body;
+  addSystemLog('POST', req.url, 200, 'Webhook Received', platform, body);
+
+  if (body.object === 'page' || body.object === 'instagram') {
+      if (Array.isArray(body.entry)) {
+          for (const entry of body.entry) {
+              const webhookEvents = entry.messaging || entry.changes;
+              if (Array.isArray(webhookEvents)) {
+                  for (const event of webhookEvents) {
+                      const senderId = event.sender?.id || (event.value ? event.value.sender?.id : null);
+                      const messageText = event.message?.text || (event.value ? event.value.message?.text : null);
+                      if (senderId && messageText) {
+                          await processWebhookMessage(platform, senderId, messageText);
+                      }
+                  }
+              }
+          }
+      }
+  } else if (body.field === 'messages' && body.value) {
+      const senderId = body.value.sender?.id;
+      const messageText = body.value.message?.text;
+      if (senderId && messageText) {
+           await processWebhookMessage(platform, senderId, messageText);
+      }
+  }
+
+  res.status(200).send('EVENT_RECEIVED');
+};
+
+const handleWebhookVerification = (req: any, res: any, platform: string) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
+      addSystemLog('GET', req.url, 200, 'Verification Success', platform, req.query);
+      res.status(200).send(challenge);
+  } else {
+      res.sendStatus(403);
+  }
+};
+
 router.get('/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM (Netlify Function) is Running' }));
 router.get('/logs', (req, res) => res.json(systemLogs));
-
-router.get('/webhook/instagram', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-  if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
-      addSystemLog('GET', '/webhook/instagram', 200, 'Verification Success', 'instagram', req.query);
-      res.status(200).send(challenge);
-  } else {
-      res.sendStatus(403);
-  }
-});
-
-router.post('/webhook/instagram', (req, res) => {
-  addSystemLog('POST', '/webhook/instagram', 200, 'Event Received', 'instagram', req.body);
-  res.status(200).send('EVENT_RECEIVED');
-});
-
-router.get('/webhook/whatsapp', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-  if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
-      addSystemLog('GET', '/webhook/whatsapp', 200, 'Verification Success', 'whatsapp', req.query);
-      res.status(200).send(challenge);
-  } else {
-      res.sendStatus(403);
-  }
-});
-
-router.post('/webhook/whatsapp', (req, res) => {
-  addSystemLog('POST', '/webhook/whatsapp', 200, 'Event Received', 'whatsapp', req.body);
-  res.status(200).send('EVENT_RECEIVED');
-});
+router.get('/webhook/instagram', (req, res) => handleWebhookVerification(req, res, 'instagram'));
+router.post('/webhook/instagram', (req, res) => handleWebhookEvent(req, res, 'instagram'));
+router.get('/webhook/whatsapp', (req, res) => handleWebhookVerification(req, res, 'whatsapp'));
+router.post('/webhook/whatsapp', (req, res) => handleWebhookEvent(req, res, 'whatsapp'));
 
 api.use('/api', router);
 api.use('/', router);

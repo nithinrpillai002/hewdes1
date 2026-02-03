@@ -1,6 +1,7 @@
+
 import React, { useEffect, useState } from 'react';
-import { ShieldCheck, Moon, Sun, Activity, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Server, PlayCircle, Wifi, WifiOff, Cloud, Key } from 'lucide-react';
-import { SystemLog } from '../types';
+import { ShieldCheck, Moon, Sun, Activity, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Server, PlayCircle, Wifi, WifiOff, Cloud, Key, Database, Lock, Save, Eye, EyeOff } from 'lucide-react';
+import { SystemLog, PlatformCredentials } from '../types';
 
 interface SettingsProps {
   darkMode: boolean;
@@ -17,42 +18,38 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
   const [simulating, setSimulating] = useState(false);
 
   // KIE API Key State
-  const [kieApiKey, setKieApiKey] = useState(() => {
-    if (typeof window !== 'undefined') {
-        // Pre-fill with the known key if empty, to help the user start immediately
-        const existing = localStorage.getItem('kie_api_key');
-        if (existing) return existing;
-        return '3a748f6c1558e84cf2ca54b22c393832'; 
-    }
-    return '3a748f6c1558e84cf2ca54b22c393832';
-  });
+  const [kieApiKey, setKieApiKey] = useState(() => localStorage.getItem('kie_api_key') || '3a748f6c1558e84cf2ca54b22c393832');
   const [showKey, setShowKey] = useState(false);
 
-  // Initialize the key in local storage if not present
-  useEffect(() => {
-    if (typeof window !== 'undefined' && !localStorage.getItem('kie_api_key')) {
-        localStorage.setItem('kie_api_key', '3a748f6c1558e84cf2ca54b22c393832');
-    }
-  }, []);
+  // Platform Credentials State
+  const [igCreds, setIgCreds] = useState<PlatformCredentials>(() => JSON.parse(localStorage.getItem('ig_creds') || '{"appId":"","token":""}'));
+  const [waCreds, setWaCreds] = useState<PlatformCredentials>(() => JSON.parse(localStorage.getItem('wa_creds') || '{"appId":"","token":""}'));
+  const [showTokens, setShowTokens] = useState(false);
+
+  // Webhook Secret (Matches server.js)
+  const WEBHOOK_VERIFY_TOKEN = 'hewdes_rttf0kd11o1axrmc';
 
   const handleSaveKey = () => {
     localStorage.setItem('kie_api_key', kieApiKey);
-    alert('API Key Saved!');
+    alert('AI API Key Saved!');
+  };
+
+  const handleSaveCreds = () => {
+    localStorage.setItem('ig_creds', JSON.stringify(igCreds));
+    localStorage.setItem('wa_creds', JSON.stringify(waCreds));
+    alert('Platform Credentials Saved locally!');
   };
 
   const checkServerStatus = async () => {
     setServerStatus('checking');
     try {
-        // Try health endpoint - routed via Netlify redirects
         const res = await fetch('/health', { method: 'GET', cache: 'no-store' });
         if (res.ok) {
             setServerStatus('online');
         } else {
-            console.warn('Server health check returned non-200:', res.status);
             setServerStatus('offline');
         }
     } catch (e) {
-        console.error('Server health check connection failed:', e);
         setServerStatus('offline');
     }
   };
@@ -78,6 +75,7 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
 
   const simulateWebhook = async () => {
     setSimulating(true);
+    // Standard Meta Webhook Structure
     const mockPayload = {
         object: "instagram",
         entry: [{
@@ -86,26 +84,27 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
             messaging: [{
                 sender: { id: "123456789" },
                 recipient: { id: "987654321" },
-                message: { text: "Do you have this mug in red?" }
+                timestamp: Date.now(),
+                message: { 
+                    mid: "m_mid." + Date.now(),
+                    text: "Do you have this mug in red?" 
+                }
             }]
         }]
     };
 
     if (serverStatus === 'online') {
-        // Send to real local server / Netlify function
         try {
             await fetch('/webhook/instagram', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(mockPayload)
             });
-            // Refresh logs to show the new entry
             await fetchLogs();
         } catch (e) {
             console.error("Simulation failed", e);
         }
     } else {
-        // Fallback: Create a fake local log so the user sees UI interaction
         const fakeLog: SystemLog = {
             id: Date.now().toString(),
             timestamp: new Date().toISOString(),
@@ -118,15 +117,12 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
         };
         setLogs(prev => [fakeLog, ...prev]);
     }
-    
     setTimeout(() => setSimulating(false), 500);
   };
 
   useEffect(() => {
     checkServerStatus();
     fetchLogs();
-    
-    // Periodically check server status every 30 seconds
     const interval = setInterval(checkServerStatus, 30000);
     return () => clearInterval(interval);
   }, []);
@@ -141,13 +137,8 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
     return 'text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700';
   };
 
-  const getStatusIcon = (status: number) => {
-    if (status >= 200 && status < 300) return <CheckCircle size={14} className="mr-1" />;
-    return <XCircle size={14} className="mr-1" />;
-  };
-
   return (
-    <div className="p-8 h-full max-w-4xl mx-auto overflow-y-auto">
+    <div className="p-8 h-full max-w-4xl mx-auto overflow-y-auto pb-24">
       <div className="flex items-center justify-between mb-8">
           <div>
             <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-2">Global Settings</h2>
@@ -169,21 +160,127 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
 
       <div className="space-y-6">
         
-        {/* AI Configuration */}
+        {/* Webhook Configuration */}
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
-             <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+            <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                    <div className="p-2 bg-pink-100 dark:bg-pink-900/30 text-pink-600 dark:text-pink-400 rounded-lg">
+                        <Database size={24} />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-slate-800 dark:text-white">Webhook Integration</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Connect your Facebook/Instagram Apps</p>
+                    </div>
+                </div>
+            </div>
+            <div className="p-8 space-y-6">
+                <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-800">
+                    <h4 className="text-sm font-bold text-blue-800 dark:text-blue-300 mb-2 flex items-center">
+                        <Lock size={14} className="mr-2" /> Webhook Secret Key (Verify Token)
+                    </h4>
+                    <p className="text-xs text-blue-700 dark:text-blue-400 mb-3">
+                        Use this token when configuring the webhook in the Meta Developer Portal.
+                    </p>
+                    <div className="flex items-center space-x-2">
+                        <code className="flex-1 bg-white dark:bg-slate-900 px-3 py-2 rounded-lg border border-blue-200 dark:border-blue-700 font-mono text-sm text-slate-600 dark:text-slate-300">
+                            {WEBHOOK_VERIFY_TOKEN}
+                        </code>
+                        <button 
+                            onClick={() => navigator.clipboard.writeText(WEBHOOK_VERIFY_TOKEN)}
+                            className="px-3 py-2 bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-300 rounded-lg text-xs font-bold hover:bg-blue-200 transition-colors"
+                        >
+                            Copy
+                        </button>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Instagram Credentials */}
+                    <div className="space-y-3">
+                        <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center">
+                            Instagram Graph API
+                        </h4>
+                        <div>
+                            <label className="block text-xs font-medium text-slate-500 mb-1">App / Page ID</label>
+                            <input 
+                                type="text" 
+                                value={igCreds.appId}
+                                onChange={(e) => setIgCreds({...igCreds, appId: e.target.value})}
+                                className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-pink-500 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-slate-500 mb-1">Access Token</label>
+                            <div className="relative">
+                                <input 
+                                    type={showTokens ? "text" : "password"}
+                                    value={igCreds.token}
+                                    onChange={(e) => setIgCreds({...igCreds, token: e.target.value})}
+                                    className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-pink-500 outline-none pr-10"
+                                />
+                                <button onClick={() => setShowTokens(!showTokens)} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                                    {showTokens ? <EyeOff size={14}/> : <Eye size={14}/>}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* WhatsApp Credentials */}
+                    <div className="space-y-3">
+                        <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center">
+                            WhatsApp Business API
+                        </h4>
+                        <div>
+                            <label className="block text-xs font-medium text-slate-500 mb-1">Phone Number ID</label>
+                            <input 
+                                type="text" 
+                                value={waCreds.appId}
+                                onChange={(e) => setWaCreds({...waCreds, appId: e.target.value})}
+                                className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-slate-500 mb-1">Access Token</label>
+                            <div className="relative">
+                                <input 
+                                    type={showTokens ? "text" : "password"}
+                                    value={waCreds.token}
+                                    onChange={(e) => setWaCreds({...waCreds, token: e.target.value})}
+                                    className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none pr-10"
+                                />
+                                <button onClick={() => setShowTokens(!showTokens)} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                                    {showTokens ? <EyeOff size={14}/> : <Eye size={14}/>}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                    <button 
+                        onClick={handleSaveCreds}
+                        className="flex items-center px-4 py-2 bg-slate-800 dark:bg-slate-700 hover:bg-slate-700 dark:hover:bg-slate-600 text-white rounded-lg font-medium text-sm transition-colors"
+                    >
+                        <Save size={16} className="mr-2" /> Save Credentials
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        {/* AI Key Configuration */}
+        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
+            <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
                 <div className="flex items-center space-x-3">
                     <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
                         <Key size={24} />
                     </div>
                     <div>
-                        <h3 className="font-bold text-slate-800 dark:text-white">AI Configuration (KIE API)</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Manage your connection to Gemini 3 Flash</p>
+                        <h3 className="font-bold text-slate-800 dark:text-white">AI Configuration</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Gemini 3 Flash API Key</p>
                     </div>
                 </div>
             </div>
             <div className="p-8">
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">KIE API Key</label>
                 <div className="flex space-x-2">
                     <div className="relative flex-1">
                         <input 
@@ -208,41 +305,10 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                         Save Key
                     </button>
                 </div>
-                <p className="text-xs text-slate-400 mt-2">
-                    Get your key from <a href="https://kie.ai/api-key" target="_blank" className="text-indigo-500 hover:underline">kie.ai/api-key</a>. This key is stored locally in your browser and sent securely to the backend.
-                </p>
             </div>
         </div>
 
-        {/* Appearance Settings */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
-            <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-                <div className="p-2 bg-slate-100 dark:bg-slate-900/30 text-slate-600 dark:text-slate-400 rounded-lg">
-                    {darkMode ? <Moon size={24} /> : <Sun size={24} />}
-                </div>
-                <div>
-                    <h3 className="font-bold text-slate-800 dark:text-white">Appearance</h3>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Customize how the app looks</p>
-                </div>
-            </div>
-            </div>
-            
-            <div className="p-8 flex items-center justify-between">
-                <div>
-                    <p className="font-medium text-slate-800 dark:text-white">Dark Mode</p>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Reduce eye strain in low-light environments</p>
-                </div>
-                <button 
-                    onClick={() => setDarkMode(!darkMode)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${darkMode ? 'bg-indigo-600' : 'bg-gray-200'}`}
-                >
-                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${darkMode ? 'translate-x-6' : 'translate-x-1'}`} />
-                </button>
-            </div>
-        </div>
-
-        {/* System Activity & API Logs */}
+        {/* System Logs */}
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
             <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
                 <div className="flex items-center space-x-3">
@@ -250,8 +316,8 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                         <Activity size={24} />
                     </div>
                     <div>
-                        <h3 className="font-bold text-slate-800 dark:text-white">System Activity & API Logs</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Outgoing chats and incoming webhooks</p>
+                        <h3 className="font-bold text-slate-800 dark:text-white">Receive Log & System Activity</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Inspect raw payloads and API responses</p>
                     </div>
                 </div>
                 <div className="flex space-x-2">
@@ -275,11 +341,11 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                 </div>
             </div>
             
-            <div className="divide-y divide-gray-100 dark:divide-slate-700 max-h-[500px] overflow-y-auto">
+            <div className="divide-y divide-gray-100 dark:divide-slate-700 max-h-[600px] overflow-y-auto">
                 <div className="bg-blue-50 dark:bg-blue-900/20 p-2 text-center border-b border-blue-100 dark:border-blue-800">
                     <p className="text-xs text-blue-800 dark:text-blue-300 flex items-center justify-center">
                         <Cloud size={12} className="mr-1"/> 
-                        Note: On Netlify, these logs may reset after inactivity due to Serverless function restarts.
+                        Live Logs: Click on a row to inspect the JSON payload.
                     </p>
                 </div>
 
@@ -288,9 +354,7 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                         <Server size={48} className="mx-auto text-slate-300 dark:text-slate-600 mb-2" />
                         <p className="text-slate-500 dark:text-slate-400">No logs captured yet.</p>
                         <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-                            {serverStatus === 'offline' 
-                                ? "Server is offline. Use 'Simulate Event' to test the UI." 
-                                : "Incoming webhook requests and chat logs will appear here."}
+                            Use 'Simulate Event' or send a real webhook to populate this list.
                         </p>
                     </div>
                 ) : (
@@ -298,23 +362,25 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                         <div key={log.id} className="group">
                             <div 
                                 onClick={() => toggleLog(log.id)}
-                                className="p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer transition-colors"
+                                className={`p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer transition-colors ${expandedLogId === log.id ? 'bg-slate-50 dark:bg-slate-800' : ''}`}
                             >
                                 <div className="flex items-center space-x-4">
                                     <div className={`w-2 h-2 rounded-full ${log.status >= 200 && log.status < 300 ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                    <div>
+                                    <div className="min-w-0">
                                         <div className="flex items-center space-x-2">
-                                            <span className="font-mono text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded">{log.method}</span>
-                                            <h4 className="font-medium text-slate-800 dark:text-white text-sm capitalize">{log.outcome}</h4>
+                                            <span className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded uppercase ${log.path.includes('webhook') ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300'}`}>
+                                                {log.method}
+                                            </span>
+                                            <h4 className="font-medium text-slate-800 dark:text-white text-sm truncate max-w-[200px] md:max-w-md">{log.outcome}</h4>
                                         </div>
-                                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                                            {new Date(log.timestamp).toLocaleTimeString()} • <span className="capitalize">{log.source}</span>
+                                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">
+                                            {new Date(log.timestamp).toLocaleTimeString()} • {log.path}
                                         </p>
                                     </div>
                                 </div>
                                 <div className="flex items-center space-x-3">
-                                    <div className={`flex items-center px-2 py-1 rounded text-xs font-bold border ${getStatusColor(log.status)}`}>
-                                        {getStatusIcon(log.status)}
+                                    <div className={`hidden md:flex items-center px-2 py-1 rounded text-xs font-bold border ${getStatusColor(log.status)}`}>
+                                        {log.status === 200 ? <CheckCircle size={14} className="mr-1" /> : <XCircle size={14} className="mr-1" />}
                                         {log.status}
                                     </div>
                                     {expandedLogId === log.id ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
@@ -322,10 +388,21 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                             </div>
                             
                             {expandedLogId === log.id && (
-                                <div className="px-10 pb-4 bg-slate-50 dark:bg-slate-900/50 border-b border-gray-100 dark:border-slate-700">
-                                    <div className="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-3 overflow-hidden">
-                                        <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-2 uppercase tracking-wider">Request Payload</p>
-                                        <pre className="text-xs font-mono text-slate-700 dark:text-slate-300 overflow-x-auto whitespace-pre-wrap">
+                                <div className="px-4 md:px-10 pb-4 pt-0 bg-slate-50 dark:bg-slate-900/50 border-b border-gray-100 dark:border-slate-700 transition-all">
+                                    <div className="mt-2 bg-white dark:bg-slate-950 rounded-lg border border-gray-200 dark:border-slate-700 p-0 overflow-hidden shadow-inner">
+                                        <div className="px-3 py-1.5 bg-gray-50 dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center">
+                                            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Payload / Body</span>
+                                            <button 
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    navigator.clipboard.writeText(JSON.stringify(log.payload, null, 2));
+                                                }}
+                                                className="text-[10px] text-indigo-500 hover:underline"
+                                            >
+                                                Copy JSON
+                                            </button>
+                                        </div>
+                                        <pre className="p-3 text-xs font-mono text-slate-700 dark:text-slate-300 overflow-x-auto whitespace-pre-wrap leading-relaxed">
                                             {JSON.stringify(log.payload, null, 2)}
                                         </pre>
                                     </div>

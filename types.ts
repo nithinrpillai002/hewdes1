@@ -1,4 +1,5 @@
 
+
 export interface Product {
   id: string;
   name: string;
@@ -16,15 +17,33 @@ export interface AiRule {
   type: 'instruction' | 'restriction' | 'personality';
   content: string;
   isActive: boolean;
-  platform: 'whatsapp' | 'instagram'; // Added platform specificity
+  platform: 'whatsapp' | 'instagram';
+}
+
+export interface MessageAttachment {
+  type: 'image' | 'video' | 'audio' | 'file' | 'template';
+  payload: {
+    url?: string;
+    template_type?: string;
+    elements?: any[]; // For generic templates (product cards)
+  };
+}
+
+export interface MessageReaction {
+  reaction: string; // e.g., 'love'
+  emoji: string;
+  action: 'react' | 'unreact';
 }
 
 export interface Message {
   id: string;
-  role: 'user' | 'model' | 'system' | 'developer' | 'assistant'; 
-  content: string;
+  role: 'user' | 'model' | 'system' | 'developer' | 'assistant' | 'tool'; 
+  content?: string; // Optional if it's purely an attachment
   timestamp: number;
-  isHumanOverride?: boolean; // To distinguish AI vs You
+  isHumanOverride?: boolean;
+  type: 'text' | 'image' | 'template' | 'reaction';
+  attachments?: MessageAttachment[];
+  reaction?: MessageReaction;
 }
 
 export interface Tag {
@@ -35,6 +54,7 @@ export interface Tag {
 
 export interface Conversation {
   id: string;
+  igsid?: string; // Instagram Scoped User ID
   customerName: string;
   platform: 'whatsapp' | 'instagram';
   lastMessage: string;
@@ -44,6 +64,7 @@ export interface Conversation {
   isAiPaused: boolean;
   messages: Message[];
   avatarUrl?: string;
+  status?: 'active' | 'resolved' | 'escalated';
 }
 
 export interface PlatformConfig {
@@ -62,6 +83,11 @@ export interface SystemLog {
   outcome: string;
   source: 'instagram' | 'whatsapp' | 'system';
   payload?: any;
+}
+
+export interface PlatformCredentials {
+    appId: string;
+    token: string;
 }
 
 export enum Page {
