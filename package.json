@@ -1,7 +1,7 @@
 {
   "name": "hewdes-gifts-crm",
   "version": "1.0.0",
-  "description": "Hewdes Gifts CRM and Analytics Dashboard",
+  "description": "Hewdes Gifts CRM on Cloudflare Pages",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,8 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "express": "^4.21.0",
-    "serverless-http": "^3.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "lucide-react": "^0.344.0",
@@ -25,7 +23,8 @@
     "vite": "^5.1.4",
     "@types/react": "^18.2.64",
     "@types/react-dom": "^18.2.21",
-    "@types/node": "^20.11.24"
+    "@types/node": "^20.11.24",
+    "@cloudflare/workers-types": "^4.20240208.0"
   },
   "engines": {
     "node": ">=18.0.0"
