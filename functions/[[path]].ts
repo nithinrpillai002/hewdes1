@@ -293,29 +293,20 @@ export const onRequest = async (context: any) => {
 
     if (path === '/webhook/instagram') {
         // VERIFICATION
-       if (request.method === 'GET') {
-  const mode = url.searchParams.get('hub.mode');
-  const token = url.searchParams.get('hub.verify_token');
-  const challenge = url.searchParams.get('hub.challenge');
+        if (request.method === 'GET') {
+            const mode = url.searchParams.get('hub.mode');
+            const token = url.searchParams.get('hub.verify_token');
+            const challenge = url.searchParams.get('hub.challenge');
+            
+            console.log(`[WEBHOOK] Verification request: mode=${mode}, token=${token}`);
 
-  console.log(`[WEBHOOK] Verification request: mode=${mode}, token=${token}`);
-
-  // Meta verification request
-  if (mode === 'subscribe') {
-    if (token === VERIFY_TOKEN) {
-      addSystemLog('GET', path, 200, 'Webhook Verified', 'instagram', Object.fromEntries(url.searchParams));
-      return new Response(challenge, { status: 200 });
-    }
-
-    // Verification attempt but wrong token
-    addSystemLog('GET', path, 200, 'Verification Token Mismatch', 'instagram', Object.fromEntries(url.searchParams));
-    return new Response('OK', { status: 200 });
-  }
-
-  // IMPORTANT: never 403 for plain GETs
-  addSystemLog('GET', path, 200, 'Health Check', 'instagram', Object.fromEntries(url.searchParams));
-  return new Response('OK', { status: 200 });
-}
+            if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+                addSystemLog('GET', path, 200, 'Webhook Verified', 'instagram', Object.fromEntries(url.searchParams));
+                return new Response(challenge, { status: 200 });
+            }
+            addSystemLog('GET', path, 403, 'Verification Failed', 'instagram', Object.fromEntries(url.searchParams));
+            return new Response('OK', { status: 200 });
+        }
 
         // EVENT RECEIPT
         if (request.method === 'POST') {
