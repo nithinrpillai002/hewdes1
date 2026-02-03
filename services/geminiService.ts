@@ -27,6 +27,7 @@ export const generateAIResponse = async (
 
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        console.error("Backend Error Response:", errorData);
         throw new Error(errorData.text || `Server responded with ${response.status}`);
     }
 

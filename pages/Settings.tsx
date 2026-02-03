@@ -242,7 +242,7 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
             </div>
         </div>
 
-        {/* Webhook Activity Logs */}
+        {/* System Activity & API Logs */}
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
             <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
                 <div className="flex items-center space-x-3">
@@ -250,8 +250,8 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                         <Activity size={24} />
                     </div>
                     <div>
-                        <h3 className="font-bold text-slate-800 dark:text-white">Webhook Activity Log</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Real-time incoming requests from Meta</p>
+                        <h3 className="font-bold text-slate-800 dark:text-white">System Activity & API Logs</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Outgoing chats and incoming webhooks</p>
                     </div>
                 </div>
                 <div className="flex space-x-2">
@@ -290,7 +290,7 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                         <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
                             {serverStatus === 'offline' 
                                 ? "Server is offline. Use 'Simulate Event' to test the UI." 
-                                : "Incoming webhook requests will appear here."}
+                                : "Incoming webhook requests and chat logs will appear here."}
                         </p>
                     </div>
                 ) : (

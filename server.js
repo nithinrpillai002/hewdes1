@@ -34,12 +34,9 @@ app.enable('trust proxy');
 app.use((req, res, next) => {
   const isWebhook = req.url.includes('/webhook');
   const isApi = req.url.includes('/api/');
-  const isAsset = req.url.match(/\.(js|css|png|jpg|ico|tsx|ts|json)$/);
-
+  
   if (isWebhook) {
-    console.log('\n╔════════════════════════════════════════════════════════════╗');
-    console.log(`║ 📨 INCOMING WEBHOOK: ${req.method} ${req.originalUrl}`);
-    console.log('╚════════════════════════════════════════════════════════════╝');
+    console.log(`\n[WEBHOOK] ${req.method} ${req.originalUrl}`);
   } else if (isApi) {
     console.log(`[API] ${req.method} ${req.originalUrl}`);
   }
@@ -68,11 +65,7 @@ const addSystemLog = (method, url, status, outcome, source, payload) => {
   systemLogs.unshift(logEntry);
   if (systemLogs.length > MAX_LOGS) systemLogs.pop();
   
-  if (status >= 400) {
-    console.error(`[LOG-ERROR] ${outcome}`);
-  } else {
-    console.log(`[LOG-SAVED] ${outcome}`);
-  }
+  if (status >= 400) console.error(`[LOG-ERROR] ${outcome}`);
 };
 
 // --- CHAT HELPERS ---
@@ -98,8 +91,10 @@ const checkDeliveryAPI = async (pincode) => {
 
 // --- KIE API Integration ---
 async function callKieGemini(messages, apiKey) {
+    // Ensuring we use the Flash endpoint
     const KIE_ENDPOINT = "https://api.kie.ai/gemini-3-flash/v1/chat/completions";
     
+    // Tools definition
     const tools = [
         {
             type: "function",
@@ -127,34 +122,42 @@ async function callKieGemini(messages, apiKey) {
         }
     ];
 
-    const body = { messages: messages, tools: tools, stream: false };
-    
-    console.log(`[KIE-REQ] POST ${KIE_ENDPOINT}`);
-    console.log(`[KIE-KEY] ${apiKey ? apiKey.substring(0, 5) + '...' : 'NONE'}`);
+    // Construct Body strictly as per docs
+    const body = {
+        messages: messages,
+        stream: false,
+        // Only include tools if we actually have them (good practice)
+        tools: tools,
+    };
+
+    console.log(`[KIE-REQ] Sending to ${KIE_ENDPOINT}`);
+    // console.log(`[KIE-BODY] ${JSON.stringify(body).substring(0, 200)}...`); 
 
     try {
         const response = await fetch(KIE_ENDPOINT, {
             method: 'POST',
             headers: {
+                'Content-Type': 'application/json',
                 'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
+                'Accept': 'application/json',
+                'User-Agent': 'Hewdes-CRM-Server/1.0'
             },
             body: JSON.stringify(body)
         });
 
         if (!response.ok) {
             const errText = await response.text();
-            console.error(`[KIE-ERR] Status: ${response.status}`);
-            console.error(`[KIE-ERR] Body: ${errText}`);
-            throw new Error(`KIE API Error: ${response.status} ${errText}`);
+            console.error(`[KIE-FAIL] HTTP ${response.status}`);
+            console.error(`[KIE-FAIL] Response: ${errText}`);
+            throw new Error(`KIE API responded with ${response.status}: ${errText}`);
         }
         
         const json = await response.json();
-        console.log(`[KIE-RES] Success`);
+        console.log(`[KIE-SUCCESS] Tokens Used: ${json.usage?.total_tokens || 'N/A'}`);
         return json;
 
     } catch (error) {
-        console.error(`[KIE-FAIL] Network or Parse Error:`, error);
+        console.error(`[KIE-ERROR] Connection Failed:`, error);
         throw error;
     }
 }
@@ -174,73 +177,110 @@ app.get('/api/logs', (req, res) => {
 
 app.post('/api/chat', async (req, res) => {
   try {
-    const { history, currentMessage, products, rules, platform, apiKey } = req.body;
+    const { history = [], currentMessage, products = [], rules = [], platform, apiKey } = req.body || {};
     const effectiveApiKey = apiKey || HARDCODED_KIE_KEY;
 
     if (!effectiveApiKey) {
-        return res.status(500).json({ text: "Server Configuration Error: No API Key available." });
+        return res.status(500).json({ text: "Configuration Error: No API Key found." });
     }
 
-    const productCatalog = products ? products.map((p) => 
-      `ITEM: ${p.name} | PRICE: ₹${p.price} | DETAILS: ${p.description} | STOCK: ${p.inStock ? 'Yes' : 'No'}`
+    // 1. System Instruction - Use safe arrays
+    const productCatalog = Array.isArray(products) ? products.map((p) => 
+      `ITEM: ${p.name} | PRICE: ${p.price} | STOCK: ${p.inStock ? 'Yes' : 'No'}`
     ).join('\n') : '';
 
-    const activeRules = rules ? rules.filter((r) => r.isActive).map((r) => `- ${r.content}`).join('\n') : '';
+    const activeRules = Array.isArray(rules) ? rules.filter((r) => r.isActive).map((r) => `- ${r.content}`).join('\n') : '';
 
     const systemMessage = {
         role: "developer",
-        content: [{ type: "text", text: `You are a helpful assistant for "Hewdes Gifts" on ${platform}. GOAL: Help customers buy gifts. PRODUCTS:\n${productCatalog}\nRULES:\n${activeRules}\nIf asked about delivery, ALWAYS ask for a pincode and use checkDelivery.` }]
+        content: [{ 
+            type: "text", 
+            text: `You are a helpful assistant for "Hewdes Gifts" on ${platform}. 
+                   GOAL: Sell gifts. 
+                   PRODUCTS:\n${productCatalog}\n
+                   RULES:\n${activeRules}\n
+                   If delivery asked, use checkDelivery with pincode.` 
+        }]
     };
 
-    const conversationMessages = history
-        .filter((msg) => msg.role === 'user' || msg.role === 'model' || msg.role === 'assistant')
+    // 2. Format History for KIE (Unified Format) - Safeguard history
+    const conversationMessages = Array.isArray(history) ? history
+        .filter((msg) => ['user', 'model', 'assistant', 'tool'].includes(msg.role))
         .map((msg) => ({
             role: msg.role === 'model' ? 'assistant' : msg.role,
             content: [{ type: "text", text: msg.content }]
-        }));
+        })) : [];
 
+    // 3. Add Current Message
     conversationMessages.push({ role: "user", content: [{ type: "text", text: currentMessage }] });
+
+    // 4. Final Payload
     const payload = [systemMessage, ...conversationMessages];
 
+    // 5. Initial Call
     let kieResponse = await callKieGemini(payload, effectiveApiKey);
-    const choice = kieResponse.choices[0];
-    const message = choice.message;
+    
+    // 6. Handle Tool Calls
+    const choice = kieResponse.choices?.[0];
+    const message = choice?.message;
     let finalAction = undefined;
 
-    if (choice.finish_reason === "tool_calls" || message.tool_calls) {
+    if (message && (choice.finish_reason === "tool_calls" || message.tool_calls)) {
+        // Add assistant's tool request to history
         payload.push(message);
+
         for (const toolCall of message.tool_calls) {
             const functionName = toolCall.function.name;
             const args = JSON.parse(toolCall.function.arguments);
             let toolResult = "";
+            
             if (functionName === "checkDelivery") {
                 finalAction = `Checking Pincode: ${args.pincode}`;
                 toolResult = await checkDeliveryAPI(args.pincode);
             } else if (functionName === "escalateToHuman") {
                 finalAction = `Escalating: ${args.reason}`;
-                toolResult = "Support ticket created. Agent notified.";
+                toolResult = "Support ticket created.";
                 addSystemLog('POST', '/api/chat', 200, 'Escalation', platform, args);
             }
+            
+            // Add Tool Result
             payload.push({
-                role: "tool", tool_call_id: toolCall.id, content: [{ type: "text", text: toolResult }]
+                role: "tool", 
+                tool_call_id: toolCall.id, 
+                content: [{ type: "text", text: toolResult }]
             });
         }
+        
+        // 7. Follow-up Call with tool results
         kieResponse = await callKieGemini(payload, effectiveApiKey);
     }
 
-    const finalContent = kieResponse.choices[0].message.content;
-    let textResponse = "";
+    // 8. Extract Response
+    const finalContent = kieResponse.choices?.[0]?.message?.content;
+    let textResponse = "I'm not sure how to answer that.";
+    
     if (typeof finalContent === 'string') textResponse = finalContent;
     else if (Array.isArray(finalContent)) textResponse = finalContent.map(c => c.text).join(' ');
     
+    // --- LOGGING ---
+    addSystemLog('POST', '/api/chat', 200, 'Outgoing Chat & Response', platform || 'simulator', {
+        input: currentMessage,
+        response: textResponse,
+        toolUsed: finalAction || 'None',
+        tokenUsage: kieResponse.usage || 'N/A'
+    });
+
     res.json({ text: textResponse, actionTaken: finalAction });
+
   } catch (e) {
-    console.error("Error in Backend:", e);
+    console.error("Backend Chat Error:", e);
     const msg = e.message || "Unknown error";
+    addSystemLog('POST', '/api/chat', 500, 'Chat Failure', req.body?.platform || 'system', { error: msg });
     res.status(500).json({ text: `System Error: ${msg}`, actionTaken: "API Error" });
   }
 });
 
+// --- WEBHOOKS ---
 const handleWebhookVerification = (req, res, platform) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -275,6 +315,7 @@ app.use(async (req, res, next) => {
   const absolutePath = path.join(__dirname, relativePath);
   let filePathToServe = null;
   let loaderType = 'tsx';
+  
   if (!path.extname(absolutePath)) {
     if (fs.existsSync(absolutePath + '.tsx')) { filePathToServe = absolutePath + '.tsx'; loaderType = 'tsx'; }
     else if (fs.existsSync(absolutePath + '.ts')) { filePathToServe = absolutePath + '.ts'; loaderType = 'ts'; }
@@ -283,6 +324,7 @@ app.use(async (req, res, next) => {
     if (absolutePath.endsWith('.ts')) loaderType = 'ts';
     if (absolutePath.endsWith('.tsx')) loaderType = 'tsx';
   }
+  
   if (filePathToServe && (loaderType === 'tsx' || loaderType === 'ts')) {
     try {
       const content = fs.readFileSync(filePathToServe, 'utf8');
