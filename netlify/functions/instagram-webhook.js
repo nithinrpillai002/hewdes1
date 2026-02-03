@@ -26,6 +26,7 @@ exports.handler = async (event, context) => {
         headers,
         body: JSON.stringify({
           status: 'ok',
+          count: webhookHistory.length,
           events: webhookHistory
         })
       };
@@ -75,21 +76,28 @@ exports.handler = async (event, context) => {
   // POST - Receive Messages
   if (event.httpMethod === 'POST') {
     try {
+      // Log headers to debug content-type issues or missing signatures
+      console.log('Incoming Webhook Headers:', JSON.stringify(event.headers));
+      
       const body = JSON.parse(event.body);
       
       console.log('Webhook received:', JSON.stringify(body, null, 2));
 
       // Add to in-memory history for frontend polling
       const eventLog = {
-        _id: Date.now() + Math.random().toString(),
+        _id: Date.now().toString() + Math.random().toString().slice(2, 6),
         receivedAt: new Date().toISOString(),
+        method: 'POST',
+        headers: event.headers,
         payload: body
       };
       
+      // Add to start of array
       webhookHistory.unshift(eventLog);
-      // Keep only last 20 events to prevent memory bloat
-      if (webhookHistory.length > 20) {
-        webhookHistory = webhookHistory.slice(0, 20);
+      
+      // Keep only last 50 events
+      if (webhookHistory.length > 50) {
+        webhookHistory = webhookHistory.slice(0, 50);
       }
       
       return {
@@ -102,7 +110,7 @@ exports.handler = async (event, context) => {
       return {
         statusCode: 500,
         headers,
-        body: JSON.stringify({ error: 'Internal server error' })
+        body: JSON.stringify({ error: 'Internal server error', details: error.message })
       };
     }
   }
