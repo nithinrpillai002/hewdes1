@@ -2,8 +2,9 @@
 import { GoogleGenAI } from "@google/genai";
 
 // --- IN-MEMORY STATE (Ephemeral per isolate) ---
-// Note: In a serverless edge environment, global variables are not guaranteed 
-// to persist across all requests, but often do within the same "warm" instance.
+// NOTE: In Cloudflare Pages, this memory is cleared when the worker idles or recycles.
+// For a production CRM, you MUST use a database (Supabase, Firebase, Cloudflare D1).
+// This in-memory store allows the demo to work as long as the worker stays warm (active).
 let conversationsStore: any[] = [];
 let systemLogs: any[] = [];
 const MAX_LOGS = 100;
@@ -23,6 +24,7 @@ const PRODUCT_CATALOG = [
 // --- HELPERS ---
 
 const addSystemLog = (method: string, url: string, status: number, outcome: string, source: string, payload: any) => {
+  console.log(`[LOG] ${method} ${url} - ${outcome} (${status})`);
   const logEntry = {
     id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
     timestamp: new Date().toISOString(),
@@ -140,6 +142,8 @@ async function generateAiResponse(conversationHistory: any[], apiKey: string) {
 async function handleIncomingMessage(senderId: string, incomingData: any, env: any) {
     const token = RUNTIME_IG_TOKEN || env.IG_ACCESS_TOKEN;
     const apiKey = env.API_KEY;
+
+    console.log(`[HANDLE] Processing message from ${senderId}`);
 
     // 1. Profile Fetch
     const profileData = await fetchInstagramProfile(senderId, token);
@@ -294,6 +298,8 @@ export const onRequest = async (context: any) => {
             const token = url.searchParams.get('hub.verify_token');
             const challenge = url.searchParams.get('hub.challenge');
             
+            console.log(`[WEBHOOK] Verification request: mode=${mode}, token=${token}`);
+
             if (mode === 'subscribe' && token === VERIFY_TOKEN) {
                 addSystemLog('GET', path, 200, 'Webhook Verified', 'instagram', Object.fromEntries(url.searchParams));
                 return new Response(challenge, { status: 200 });
@@ -306,7 +312,8 @@ export const onRequest = async (context: any) => {
         if (request.method === 'POST') {
             try {
                 const body: any = await request.json();
-                
+                console.log(`[WEBHOOK] Received Payload:`, JSON.stringify(body).substring(0, 200) + '...');
+
                 if (body.object === 'instagram' || body.object === 'page') {
                     if (Array.isArray(body.entry)) {
                         for (const entry of body.entry) {
@@ -325,6 +332,7 @@ export const onRequest = async (context: any) => {
                 addSystemLog('POST', path, 200, 'Webhook Processed', 'instagram', body);
                 return new Response('EVENT_RECEIVED', { status: 200 });
             } catch (e: any) {
+                console.error(`[WEBHOOK] Error processing:`, e);
                 addSystemLog('POST', path, 500, 'Webhook Error', 'instagram', { error: e.message });
                 return new Response('Error', { status: 500 });
             }
