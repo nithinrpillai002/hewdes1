@@ -5,7 +5,6 @@ import serverless from 'serverless-http';
 const api = express();
 const router = Router();
 
-// --- CRITICAL: Enable JSON Parsing ---
 api.use(express.json() as any);
 api.use(express.urlencoded({ extended: true }) as any);
 
@@ -31,82 +30,62 @@ const addSystemLog = (method: string, url: string, status: number, outcome: stri
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'hewdes_rttf0kd11o1axrmc';
 const HARDCODED_KIE_KEY = '3a748f6c1558e84cf2ca54b22c393832';
+const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || ''; 
+const GRAPH_VERSION = "v21.0";
 
-// --- Local Helper Functions for Tools ---
-const checkDeliveryAPI = async (pincode: string): Promise<string> => {
-  await new Promise(resolve => setTimeout(resolve, 800));
-  const validPincode = /^[1-9][0-9]{5}$/.test(pincode);
-  if (!validPincode) return "That doesn't look like a valid pincode. Could you please double-check? It should be 6 digits.";
-  
-  const regionDigit = parseInt(pincode[0]);
-  let days = 3;
-  let regionName = "Metro City";
-  if (regionDigit <= 3) { days = 2; regionName = "North/West India"; }
-  else if (regionDigit <= 6) { days = 3; regionName = "South/Central India"; }
-  else { days = 5; regionName = "East/North-East India"; }
+// --- Real Meta API Call (Text Only) ---
+async function sendToInstagram(recipientId: string, text: string) {
+    if (!IG_ACCESS_TOKEN) {
+        addSystemLog('POST', 'META_API', 400, 'Missing IG Token', 'instagram', { text });
+        return;
+    }
 
-  const deliveryDate = new Date();
-  deliveryDate.setDate(deliveryDate.getDate() + days);
-  const options = { weekday: 'long', month: 'short', day: 'numeric' } as const;
-  // @ts-ignore
-  const formattedDate = deliveryDate.toLocaleDateString('en-IN', options);
-  return `Good news, we service ${regionName}! If you order now, it should reach you by ${formattedDate} (approx ${days} days).`;
-};
+    const url = `https://graph.facebook.com/${GRAPH_VERSION}/me/messages?access_token=${IG_ACCESS_TOKEN}`;
+    const payload = {
+        recipient: { id: recipientId },
+        message: { text: text }
+    };
 
-// --- KIE API Integration ---
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        
+        if (!response.ok) {
+            addSystemLog('POST', url, response.status, 'Meta API Error', 'instagram', data);
+        } else {
+            addSystemLog('POST', url, 200, 'Message Sent', 'instagram', { payload, response: data });
+        }
+    } catch (e: any) {
+        addSystemLog('POST', url, 500, 'Fetch Error', 'instagram', { error: e.message });
+    }
+}
+
+// --- KIE API Integration (Simple Text) ---
 async function callKieGemini(messages: any[], apiKey: string) {
     const KIE_ENDPOINT = "https://api.kie.ai/gemini-3-flash/v1/chat/completions";
     
-    const tools = [
-        {
-            type: "function",
-            function: {
-                name: "checkDelivery",
-                description: "Checks delivery availability and estimated delivery date for a given Indian pincode.",
-                parameters: {
-                    type: "object",
-                    properties: { pincode: { type: "string", description: "The 6-digit pincode." } },
-                    required: ["pincode"]
-                }
-            }
-        },
-        {
-            type: "function",
-            function: {
-                name: "escalateToHuman",
-                description: "Escalates the conversation to a human agent.",
-                parameters: {
-                    type: "object",
-                    properties: { reason: { type: "string" }, summary: { type: "string" } },
-                    required: ["reason", "summary"]
-                }
-            }
-        }
-    ];
-
+    // Simplified: No Tools, just text
     const body = {
         messages: messages,
-        stream: false,
-        tools: tools
+        stream: false
     };
-
-    console.log(`[Netlify] POST ${KIE_ENDPOINT}`);
 
     try {
         const response = await fetch(KIE_ENDPOINT, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Content-Type': 'application/json'
             },
             body: JSON.stringify(body)
         });
 
         if (!response.ok) {
-            const err = await response.text();
-            console.error(`[Netlify] KIE Error ${response.status}:`, err);
-            throw new Error(`KIE API Error: ${response.status} ${err}`);
+            throw new Error(`KIE API Error: ${response.status}`);
         }
 
         return await response.json();
@@ -116,38 +95,29 @@ async function callKieGemini(messages: any[], apiKey: string) {
     }
 }
 
-// --- Chat Endpoint ---
+// --- Chat Endpoint (Manual Testing) ---
 router.post('/chat', async (req, res) => {
   try {
-    const { history = [], currentMessage, products = [], rules = [], platform, apiKey } = req.body || {};
+    const { history = [], currentMessage, products = [], apiKey } = req.body || {};
     const effectiveApiKey = apiKey || HARDCODED_KIE_KEY;
 
-    if (!effectiveApiKey) {
-        return res.status(500).json({ text: "Server Configuration Error: No API Key available." });
-    }
-
     const productCatalog = Array.isArray(products) ? products.map((p: any) => 
-      `ITEM: ${p.name} | PRICE: ${p.price} | STOCK: ${p.inStock ? 'Yes' : 'No'}`
+      `${p.name} - ₹${p.price}`
     ).join('\n') : '';
-
-    const activeRules = Array.isArray(rules) ? rules.filter((r: any) => r.isActive).map((r: any) => `- ${r.content}`).join('\n') : '';
 
     const systemMessage = {
         role: "developer",
         content: [{ 
             type: "text", 
-            text: `You are a helpful assistant for "Hewdes Gifts" on ${platform}. 
-                   GOAL: Sell gifts. 
+            text: `You are a helpful assistant for Hewdes Gifts on Instagram. 
                    PRODUCTS:\n${productCatalog}\n
-                   RULES:\n${activeRules}\n
-                   If delivery asked, use checkDelivery with pincode.` 
+                   Keep answers short and friendly.` 
         }]
     };
 
     const conversationMessages = Array.isArray(history) ? history
-        .filter((msg: any) => ['user', 'model', 'assistant', 'tool'].includes(msg.role))
         .map((msg: any) => ({
-            role: msg.role === 'model' ? 'assistant' : msg.role,
+            role: msg.role === 'model' ? 'assistant' : 'user',
             content: [{ type: "text", text: msg.content }]
         })) : [];
 
@@ -156,57 +126,20 @@ router.post('/chat', async (req, res) => {
     const payload: any[] = [systemMessage, ...conversationMessages];
 
     let kieResponse = await callKieGemini(payload, effectiveApiKey);
-    const choice = kieResponse.choices?.[0];
-    const message = choice?.message;
-    let finalAction = undefined;
-
-    if (message && (choice.finish_reason === "tool_calls" || message.tool_calls)) {
-        payload.push(message);
-        for (const toolCall of message.tool_calls) {
-            const functionName = toolCall.function.name;
-            const args = JSON.parse(toolCall.function.arguments);
-            let toolResult = "";
-            if (functionName === "checkDelivery") {
-                finalAction = `Checking Pincode: ${args.pincode}`;
-                toolResult = await checkDeliveryAPI(args.pincode);
-            } else if (functionName === "escalateToHuman") {
-                finalAction = `Escalating: ${args.reason}`;
-                toolResult = "Support ticket created.";
-                addSystemLog('POST', '/api/chat', 200, 'Escalation', platform, args);
-            }
-            payload.push({
-                role: "tool", 
-                tool_call_id: toolCall.id, 
-                content: [{ type: "text", text: toolResult }]
-            });
-        }
-        kieResponse = await callKieGemini(payload, effectiveApiKey);
-    }
-
     const finalContent = kieResponse.choices?.[0]?.message?.content;
     let textResponse = "I'm not sure how to answer that.";
+    
     if (typeof finalContent === 'string') textResponse = finalContent;
-    else if (Array.isArray(finalContent)) textResponse = finalContent.map((c: any) => c.text).join(' ');
 
-    addSystemLog('POST', '/api/chat', 200, 'Outgoing Chat & Response', platform || 'simulator', {
-        input: currentMessage,
-        response: textResponse,
-        toolUsed: finalAction || 'None',
-        tokenUsage: kieResponse.usage || 'N/A'
-    });
-
-    res.json({ text: textResponse, actionTaken: finalAction });
+    res.json({ text: textResponse });
 
   } catch (e: any) {
-    console.error("Error in Backend:", e);
-    const msg = e.message || "Unknown error";
-    addSystemLog('POST', '/api/chat', 500, 'Chat Failure', req.body?.platform || 'system', { error: msg });
-    res.status(500).json({ text: `System Error: ${msg}`, actionTaken: "API Error" });
+    res.status(500).json({ text: `System Error: ${e.message}` });
   }
 });
 
 // --- Webhook Auto-Reply Logic ---
-const processWebhookMessage = async (platform: string, senderId: string, text: string) => {
+const processWebhookMessage = async (senderId: string, text: string) => {
     if (!text || !senderId) return;
 
     try {
@@ -221,21 +154,17 @@ const processWebhookMessage = async (platform: string, senderId: string, text: s
         let replyText = "Thank you for your message!";
         const finalContent = kieResponse.choices?.[0]?.message?.content;
         if (typeof finalContent === 'string') replyText = finalContent;
-        else if (Array.isArray(finalContent)) replyText = finalContent.map((c: any) => c.text).join(' ');
 
-        addSystemLog('POST', `https://graph.facebook.com/v19.0/me/messages`, 200, `AI Auto-Reply Sent (${platform})`, platform, {
-            recipient: senderId,
-            text: replyText,
-            note: "Simulated Send API Call"
-        });
+        await sendToInstagram(senderId, replyText);
+
     } catch (e: any) {
-        addSystemLog('INTERNAL', 'processWebhookMessage', 500, 'Auto-Reply Failed', platform, { error: e.message });
+        addSystemLog('INTERNAL', 'processWebhookMessage', 500, 'Auto-Reply Failed', 'instagram', { error: e.message });
     }
 };
 
-const handleWebhookEvent = async (req: any, res: any, platform: string) => {
+const handleWebhookEvent = async (req: any, res: any) => {
   const body = req.body;
-  addSystemLog('POST', req.url, 200, 'Webhook Received', platform, body);
+  addSystemLog('POST', req.url, 200, 'Webhook Received', 'instagram', body);
 
   if (body.object === 'page' || body.object === 'instagram') {
       if (Array.isArray(body.entry)) {
@@ -245,42 +174,34 @@ const handleWebhookEvent = async (req: any, res: any, platform: string) => {
                   for (const event of webhookEvents) {
                       const senderId = event.sender?.id || (event.value ? event.value.sender?.id : null);
                       const messageText = event.message?.text || (event.value ? event.value.message?.text : null);
-                      if (senderId && messageText) {
-                          await processWebhookMessage(platform, senderId, messageText);
+                      if (senderId && messageText && !event.message?.is_echo) {
+                          await processWebhookMessage(senderId, messageText);
                       }
                   }
               }
           }
-      }
-  } else if (body.field === 'messages' && body.value) {
-      const senderId = body.value.sender?.id;
-      const messageText = body.value.message?.text;
-      if (senderId && messageText) {
-           await processWebhookMessage(platform, senderId, messageText);
       }
   }
 
   res.status(200).send('EVENT_RECEIVED');
 };
 
-const handleWebhookVerification = (req: any, res: any, platform: string) => {
+const handleWebhookVerification = (req: any, res: any) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
   if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
-      addSystemLog('GET', req.url, 200, 'Verification Success', platform, req.query);
+      addSystemLog('GET', req.url, 200, 'Verification Success', 'instagram', req.query);
       res.status(200).send(challenge);
   } else {
       res.sendStatus(403);
   }
 };
 
-router.get('/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM (Netlify Function) is Running' }));
+router.get('/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM (Netlify) Active' }));
 router.get('/logs', (req, res) => res.json(systemLogs));
-router.get('/webhook/instagram', (req, res) => handleWebhookVerification(req, res, 'instagram'));
-router.post('/webhook/instagram', (req, res) => handleWebhookEvent(req, res, 'instagram'));
-router.get('/webhook/whatsapp', (req, res) => handleWebhookVerification(req, res, 'whatsapp'));
-router.post('/webhook/whatsapp', (req, res) => handleWebhookEvent(req, res, 'whatsapp'));
+router.get('/webhook/instagram', handleWebhookVerification);
+router.post('/webhook/instagram', handleWebhookEvent);
 
 api.use('/api', router);
 api.use('/', router);

@@ -95,6 +95,7 @@ export interface SystemLog {
 export interface PlatformCredentials {
     appId: string;
     token: string;
+    graphVersion?: string; // e.g., "v21.0"
 }
 
 export enum Page {
@@ -102,4 +103,5 @@ export enum Page {
   CRM = 'crm',
   PRODUCTS = 'products',
   SETTINGS = 'settings',
+  DEVELOPER = 'developer',
 }

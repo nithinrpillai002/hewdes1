@@ -1,6 +1,6 @@
 import React from 'react';
 import { Page } from '../types';
-import { LayoutDashboard, MessageSquareText, ShoppingBag, Settings, LogOut, Gift } from 'lucide-react';
+import { LayoutDashboard, MessageSquareText, ShoppingBag, Settings, LogOut, Gift, Code, FlaskConical } from 'lucide-react';
 
 interface SidebarProps {
   currentPage: Page;
@@ -51,6 +51,18 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
       </nav>
 
       <div className="p-4 border-t border-gray-100 dark:border-slate-700 space-y-2">
+        <button 
+            onClick={() => onNavigate(Page.DEVELOPER)}
+            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
+                currentPage === Page.DEVELOPER
+                ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 font-medium border border-amber-200 dark:border-amber-800' 
+                : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white'
+            }`}
+        >
+          <FlaskConical size={20} />
+          <span>Developer Test</span>
+        </button>
+
         <button 
             onClick={() => onNavigate(Page.SETTINGS)}
             className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${

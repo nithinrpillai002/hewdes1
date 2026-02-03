@@ -1,7 +1,6 @@
 
-
 import React, { useEffect, useState } from 'react';
-import { ShieldCheck, Moon, Sun, Activity, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Server, PlayCircle, Wifi, WifiOff, Cloud, Key, Database, Lock, Save, Eye, EyeOff } from 'lucide-react';
+import { ShieldCheck, Moon, Sun, Activity, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Server, PlayCircle, Wifi, WifiOff, Cloud, Key, Database, Lock, Save, Eye, EyeOff, Send, Globe, Link as LinkIcon } from 'lucide-react';
 import { SystemLog, PlatformCredentials } from '../types';
 
 interface SettingsProps {
@@ -22,13 +21,18 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
   const [kieApiKey, setKieApiKey] = useState(() => localStorage.getItem('kie_api_key') || '3a748f6c1558e84cf2ca54b22c393832');
   const [showKey, setShowKey] = useState(false);
 
-  // Platform Credentials State
-  const [igCreds, setIgCreds] = useState<PlatformCredentials>(() => JSON.parse(localStorage.getItem('ig_creds') || '{"appId":"","token":""}'));
-  const [waCreds, setWaCreds] = useState<PlatformCredentials>(() => JSON.parse(localStorage.getItem('wa_creds') || '{"appId":"","token":""}'));
+  // Platform Credentials State (Instagram Only)
+  const [igCreds, setIgCreds] = useState<PlatformCredentials>(() => JSON.parse(localStorage.getItem('ig_creds') || '{"appId":"","token":"","graphVersion":"v21.0"}'));
   const [showTokens, setShowTokens] = useState(false);
 
-  // Webhook Secret (Matches server.js)
   const WEBHOOK_VERIFY_TOKEN = 'hewdes_rttf0kd11o1axrmc';
+  const [webhookUrl, setWebhookUrl] = useState('');
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+        setWebhookUrl(`${window.location.origin}/webhook/instagram`);
+    }
+  }, []);
 
   const handleSaveKey = () => {
     localStorage.setItem('kie_api_key', kieApiKey);
@@ -36,20 +40,23 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
   };
 
   const handleSaveCreds = async () => {
+    if (!igCreds.graphVersion) igCreds.graphVersion = "v21.0";
+
     localStorage.setItem('ig_creds', JSON.stringify(igCreds));
-    localStorage.setItem('wa_creds', JSON.stringify(waCreds));
     
-    // Attempt to sync to server (since server cannot read localstorage)
     try {
         await fetch('/api/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ igToken: igCreds.token, waToken: waCreds.token })
+            body: JSON.stringify({ 
+                igToken: igCreds.token, 
+                graphVersion: igCreds.graphVersion 
+            })
         });
-        alert('Platform Credentials Saved and Synced to Server!');
+        alert('Instagram Credentials Synced!');
     } catch (e) {
         console.error("Failed to sync config to server", e);
-        alert('Credentials saved locally, but failed to sync to server (Server might be offline).');
+        alert('Credentials saved locally, but failed to sync to server.');
     }
   };
 
@@ -88,19 +95,18 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
 
   const simulateWebhook = async () => {
     setSimulating(true);
-    // Standard Meta Webhook Structure
     const mockPayload = {
         object: "instagram",
         entry: [{
-            id: "17841400000000",
+            id: igCreds.appId || "17841400000000",
             time: Date.now(),
             messaging: [{
                 sender: { id: "123456789" },
-                recipient: { id: "987654321" },
+                recipient: { id: igCreds.appId || "17841400000000" },
                 timestamp: Date.now(),
                 message: { 
                     mid: "m_mid." + Date.now(),
-                    text: "Do you have this mug in red?" 
+                    text: "Is this product in stock?" 
                 }
             }]
         }]
@@ -113,7 +119,7 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(mockPayload)
             });
-            await fetchLogs();
+            setTimeout(fetchLogs, 1000); 
         } catch (e) {
             console.error("Simulation failed", e);
         }
@@ -155,7 +161,7 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
       <div className="flex items-center justify-between mb-8">
           <div>
             <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-2">Global Settings</h2>
-            <p className="text-slate-500 dark:text-slate-400">Manage application-wide configurations.</p>
+            <p className="text-slate-500 dark:text-slate-400">Configure Instagram & AI integration.</p>
           </div>
           <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-bold border ${
               serverStatus === 'online' 
@@ -172,6 +178,66 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
       </div>
 
       <div className="space-y-6">
+
+        {/* --- Response API Settings --- */}
+        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
+            <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                    <div className="p-2 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-lg">
+                        <Send size={24} />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-slate-800 dark:text-white">Instagram Response API</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Configure where the AI sends the reply.</p>
+                    </div>
+                </div>
+            </div>
+            <div className="p-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div>
+                        <label className="block text-xs font-medium text-slate-500 mb-1">Graph API Version</label>
+                        <select 
+                            value={igCreds.graphVersion || 'v21.0'}
+                            onChange={(e) => setIgCreds({...igCreds, graphVersion: e.target.value})}
+                            className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                        >
+                            <option value="v18.0">v18.0 (Legacy)</option>
+                            <option value="v19.0">v19.0 (Stable)</option>
+                            <option value="v20.0">v20.0 (Latest)</option>
+                            <option value="v21.0">v21.0 (Beta)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div className="bg-slate-900 rounded-xl p-4 font-mono text-xs overflow-x-auto">
+                     <div className="flex items-center text-slate-400 mb-2 border-b border-slate-700 pb-2">
+                        <Globe size={12} className="mr-2" />
+                        <span className="font-bold">OUTPUT PREVIEW</span>
+                     </div>
+                     <div className="space-y-1">
+                        <div className="flex">
+                            <span className="text-purple-400 w-16">POST</span>
+                            <span className="text-green-400">
+                                https://graph.facebook.com/{igCreds.graphVersion || 'v21.0'}/me/messages
+                            </span>
+                        </div>
+                        <div className="flex">
+                            <span className="text-blue-400 w-16">Header</span>
+                            <span className="text-slate-300">Authorization: Bearer {igCreds.token ? `${igCreds.token.substring(0, 10)}...` : 'YOUR_ACCESS_TOKEN'}</span>
+                        </div>
+                        <div className="flex mt-2">
+                            <span className="text-yellow-400 w-16">Body</span>
+                            <span className="text-slate-300">
+{`{
+  "recipient": { "id": "USER_ID" },
+  "message": { "text": "Hello world!" }
+}`}
+                            </span>
+                        </div>
+                     </div>
+                </div>
+            </div>
+        </div>
         
         {/* Webhook Configuration */}
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
@@ -182,17 +248,40 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                     </div>
                     <div>
                         <h3 className="font-bold text-slate-800 dark:text-white">Webhook Integration</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Connect your Facebook/Instagram Apps</p>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Connect your Instagram App</p>
                     </div>
                 </div>
             </div>
             <div className="p-8 space-y-6">
+                
+                {/* Webhook URL */}
+                <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700">
+                    <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center">
+                        <LinkIcon size={14} className="mr-2" /> Webhook Callback URL
+                    </h4>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                        Paste this URL into the "Callback URL" field in the Meta App Dashboard.
+                    </p>
+                    <div className="flex items-center space-x-2">
+                        <code className="flex-1 bg-white dark:bg-slate-950 px-3 py-2 rounded-lg border border-gray-300 dark:border-slate-600 font-mono text-sm text-indigo-600 dark:text-indigo-400">
+                            {webhookUrl || 'Loading...'}
+                        </code>
+                        <button 
+                            onClick={() => navigator.clipboard.writeText(webhookUrl)}
+                            className="px-3 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+                        >
+                            Copy
+                        </button>
+                    </div>
+                </div>
+
+                {/* Secret Key */}
                 <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-800">
                     <h4 className="text-sm font-bold text-blue-800 dark:text-blue-300 mb-2 flex items-center">
-                        <Lock size={14} className="mr-2" /> Webhook Secret Key (Verify Token)
+                        <Lock size={14} className="mr-2" /> Webhook Secret Key
                     </h4>
                     <p className="text-xs text-blue-700 dark:text-blue-400 mb-3">
-                        Use this token when configuring the webhook in the Meta Developer Portal.
+                        Paste this into the "Verify Token" field in the Meta App Dashboard.
                     </p>
                     <div className="flex items-center space-x-2">
                         <code className="flex-1 bg-white dark:bg-slate-900 px-3 py-2 rounded-lg border border-blue-200 dark:border-blue-700 font-mono text-sm text-slate-600 dark:text-slate-300">
@@ -207,64 +296,31 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* Instagram Credentials */}
-                    <div className="space-y-3">
-                        <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center">
-                            Instagram Graph API
-                        </h4>
-                        <div>
-                            <label className="block text-xs font-medium text-slate-500 mb-1">App / Page ID</label>
-                            <input 
-                                type="text" 
-                                value={igCreds.appId}
-                                onChange={(e) => setIgCreds({...igCreds, appId: e.target.value})}
-                                className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-pink-500 outline-none"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-slate-500 mb-1">Access Token</label>
-                            <div className="relative">
-                                <input 
-                                    type={showTokens ? "text" : "password"}
-                                    value={igCreds.token}
-                                    onChange={(e) => setIgCreds({...igCreds, token: e.target.value})}
-                                    className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-pink-500 outline-none pr-10"
-                                />
-                                <button onClick={() => setShowTokens(!showTokens)} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
-                                    {showTokens ? <EyeOff size={14}/> : <Eye size={14}/>}
-                                </button>
-                            </div>
-                        </div>
+                <div className="space-y-3">
+                    <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center">
+                        Instagram Graph API Credentials
+                    </h4>
+                    <div>
+                        <label className="block text-xs font-medium text-slate-500 mb-1">Page ID / App ID</label>
+                        <input 
+                            type="text" 
+                            value={igCreds.appId}
+                            onChange={(e) => setIgCreds({...igCreds, appId: e.target.value})}
+                            className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-pink-500 outline-none"
+                        />
                     </div>
-
-                    {/* WhatsApp Credentials */}
-                    <div className="space-y-3">
-                        <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center">
-                            WhatsApp Business API
-                        </h4>
-                        <div>
-                            <label className="block text-xs font-medium text-slate-500 mb-1">Phone Number ID</label>
+                    <div>
+                        <label className="block text-xs font-medium text-slate-500 mb-1">Access Token</label>
+                        <div className="relative">
                             <input 
-                                type="text" 
-                                value={waCreds.appId}
-                                onChange={(e) => setWaCreds({...waCreds, appId: e.target.value})}
-                                className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none"
+                                type={showTokens ? "text" : "password"}
+                                value={igCreds.token}
+                                onChange={(e) => setIgCreds({...igCreds, token: e.target.value})}
+                                className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-pink-500 outline-none pr-10"
                             />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-slate-500 mb-1">Access Token</label>
-                            <div className="relative">
-                                <input 
-                                    type={showTokens ? "text" : "password"}
-                                    value={waCreds.token}
-                                    onChange={(e) => setWaCreds({...waCreds, token: e.target.value})}
-                                    className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none pr-10"
-                                />
-                                <button onClick={() => setShowTokens(!showTokens)} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
-                                    {showTokens ? <EyeOff size={14}/> : <Eye size={14}/>}
-                                </button>
-                            </div>
+                            <button onClick={() => setShowTokens(!showTokens)} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                                {showTokens ? <EyeOff size={14}/> : <Eye size={14}/>}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -280,47 +336,6 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
             </div>
         </div>
 
-        {/* AI Key Configuration */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
-            <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
-                        <Key size={24} />
-                    </div>
-                    <div>
-                        <h3 className="font-bold text-slate-800 dark:text-white">AI Configuration</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Gemini 3 Flash API Key</p>
-                    </div>
-                </div>
-            </div>
-            <div className="p-8">
-                <div className="flex space-x-2">
-                    <div className="relative flex-1">
-                        <input 
-                            type={showKey ? "text" : "password"}
-                            value={kieApiKey}
-                            onChange={(e) => setKieApiKey(e.target.value)}
-                            placeholder="sk-..."
-                            className="w-full px-4 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                        />
-                        <button 
-                            type="button"
-                            onClick={() => setShowKey(!showKey)}
-                            className="absolute right-3 top-2.5 text-xs text-slate-500 hover:text-indigo-600"
-                        >
-                            {showKey ? 'Hide' : 'Show'}
-                        </button>
-                    </div>
-                    <button 
-                        onClick={handleSaveKey}
-                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm transition-colors"
-                    >
-                        Save Key
-                    </button>
-                </div>
-            </div>
-        </div>
-
         {/* System Logs */}
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
             <div className="p-6 border-b border-gray-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
@@ -329,8 +344,8 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                         <Activity size={24} />
                     </div>
                     <div>
-                        <h3 className="font-bold text-slate-800 dark:text-white">Receive Log & System Activity</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Inspect raw payloads and API responses</p>
+                        <h3 className="font-bold text-slate-800 dark:text-white">System Activity Logs</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Inspect raw payloads</p>
                     </div>
                 </div>
                 <div className="flex space-x-2">
@@ -347,7 +362,6 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                         onClick={fetchLogs}
                         disabled={loadingLogs}
                         className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors text-slate-600 dark:text-slate-400"
-                        title="Refresh Logs"
                     >
                         <RefreshCw size={20} className={loadingLogs ? 'animate-spin' : ''} />
                     </button>
@@ -355,20 +369,10 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
             </div>
             
             <div className="divide-y divide-gray-100 dark:divide-slate-700 max-h-[600px] overflow-y-auto">
-                <div className="bg-blue-50 dark:bg-blue-900/20 p-2 text-center border-b border-blue-100 dark:border-blue-800">
-                    <p className="text-xs text-blue-800 dark:text-blue-300 flex items-center justify-center">
-                        <Cloud size={12} className="mr-1"/> 
-                        Live Logs: Click on a row to inspect the JSON payload.
-                    </p>
-                </div>
-
                 {logs.length === 0 ? (
                     <div className="p-8 text-center">
                         <Server size={48} className="mx-auto text-slate-300 dark:text-slate-600 mb-2" />
                         <p className="text-slate-500 dark:text-slate-400">No logs captured yet.</p>
-                        <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-                            Use 'Simulate Event' or send a real webhook to populate this list.
-                        </p>
                     </div>
                 ) : (
                     logs.map(log => (
@@ -403,18 +407,6 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                             {expandedLogId === log.id && (
                                 <div className="px-4 md:px-10 pb-4 pt-0 bg-slate-50 dark:bg-slate-900/50 border-b border-gray-100 dark:border-slate-700 transition-all">
                                     <div className="mt-2 bg-white dark:bg-slate-950 rounded-lg border border-gray-200 dark:border-slate-700 p-0 overflow-hidden shadow-inner">
-                                        <div className="px-3 py-1.5 bg-gray-50 dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center">
-                                            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Payload / Body</span>
-                                            <button 
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    navigator.clipboard.writeText(JSON.stringify(log.payload, null, 2));
-                                                }}
-                                                className="text-[10px] text-indigo-500 hover:underline"
-                                            >
-                                                Copy JSON
-                                            </button>
-                                        </div>
                                         <pre className="p-3 text-xs font-mono text-slate-700 dark:text-slate-300 overflow-x-auto whitespace-pre-wrap leading-relaxed">
                                             {JSON.stringify(log.payload, null, 2)}
                                         </pre>

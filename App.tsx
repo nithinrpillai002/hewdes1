@@ -4,6 +4,7 @@ import Analytics from './pages/Analytics';
 import Products from './pages/Products';
 import CRM from './pages/CRM';
 import Settings from './pages/Settings';
+import Developer from './pages/Developer';
 import { Page, Product, AiRule } from './types';
 
 const App: React.FC = () => {
@@ -85,6 +86,8 @@ const App: React.FC = () => {
         return <CRM products={products} rules={rules} setRules={setRules} />;
       case Page.SETTINGS:
         return <Settings darkMode={darkMode} setDarkMode={setDarkMode} />;
+      case Page.DEVELOPER:
+        return <Developer />;
       default:
         return <CRM products={products} rules={rules} setRules={setRules} />;
     }

@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
+import { GoogleGenAI } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,7 +19,7 @@ const BANNER = `
 * | |  | || |____ | | / /\\ \\ | |____  | |____ | | \\ \\ | | \\ \\ | | \\ \\ | |____   *
 * |_|  |_||______||_|/_/  \\_\\|______| |______||_|  \\_\\|_|  \\_\\|_|  \\_\\|______|  *
 *                                                                              *
-*                 SERVER STATUS: ONLINE & LISTENING                            *
+*                 SERVER STATUS: ONLINE & LISTENING (INSTAGRAM ONLY)           *
 ********************************************************************************
 `;
 
@@ -26,9 +27,9 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'hewdes_rttf0kd11o1axrmc';
 
-// --- KIE API CONFIGURATION ---
-const KIE_API_KEY = process.env.KIE_API_KEY || '3a748f6c1558e84cf2ca54b22c393832';
-const KIE_ENDPOINT = "https://api.kie.ai/gemini-3-flash/v1/chat/completions";
+// --- GEMINI API CONFIGURATION ---
+// Initialized with the environment variable API_KEY as per best practices.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // --- IN-MEMORY DATABASE ---
 let conversationsStore = []; 
@@ -37,7 +38,7 @@ const MAX_LOGS = 50;
 
 // --- DYNAMIC CONFIGURATION (In-Memory) ---
 let IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || '';
-let WA_ACCESS_TOKEN = process.env.WA_ACCESS_TOKEN || '';
+let GRAPH_VERSION = "v21.0"; 
 
 // --- PRODUCT CATALOG (Mock Database) ---
 const PRODUCT_CATALOG = [
@@ -83,70 +84,64 @@ const addSystemLog = (method, url, status, outcome, source, payload) => {
   if (status >= 400) console.error(`[LOG-ERROR] ${outcome}`);
 };
 
-// --- INSTAGRAM API HELPER ---
-async function fetchInstagramProfile(igsid) {
+// --- REAL META API SENDER ---
+async function callInstagramApi(payload) {
     if (!IG_ACCESS_TOKEN) {
-        console.log(`[IG-API] No Access Token set. Skipping profile fetch for ${igsid}.`);
-        return null;
+        console.warn(`[API-OUT] No Instagram Access Token configured. Logging only.`);
+        addSystemLog('POST', `https://graph.facebook.com/${GRAPH_VERSION}/me/messages`, 401, 'Missing IG Token', 'instagram', payload);
+        return { success: false, error: 'Missing Access Token' };
     }
-    
-    const url = `https://graph.instagram.com/v20.0/${igsid}?fields=name,username,profile_pic&access_token=${IG_ACCESS_TOKEN}`;
-    
+
+    const url = `https://graph.facebook.com/${GRAPH_VERSION}/me/messages?access_token=${IG_ACCESS_TOKEN}`;
+
     try {
-        console.log(`[IG-API] Fetching profile: ${url}`);
-        const response = await fetch(url);
+        console.log(`[API-OUT] Sending to Instagram:`, JSON.stringify(payload));
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const resData = await response.json();
         
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`[IG-API] Failed to fetch profile: ${errorText}`);
-            addSystemLog('GET', url, response.status, 'IG Profile Fetch Failed', 'instagram', { error: errorText });
-            return null;
+             addSystemLog('POST', url, response.status, 'Graph API Error', 'instagram', resData);
+             console.error(`[API-OUT] Error:`, resData);
+             return { success: false, error: resData };
         }
 
-        const data = await response.json();
-        addSystemLog('GET', url, 200, 'IG Profile Fetched', 'instagram', data);
-        return data; // Returns { name, username, profile_pic, id }
+        addSystemLog('POST', url, 200, 'Message Sent Successfully', 'instagram', { request: payload, response: resData });
+        return { success: true, data: resData };
+
     } catch (e) {
-        console.error(`[IG-API] Exception: ${e.message}`);
+        addSystemLog('POST', url, 500, 'Network Error', 'instagram', { error: e.message });
+        return { success: false, error: e.message };
+    }
+}
+
+
+// --- INSTAGRAM API HELPER ---
+async function fetchInstagramProfile(igsid) {
+    if (!IG_ACCESS_TOKEN) return null;
+    
+    const url = `https://graph.instagram.com/${GRAPH_VERSION}/${igsid}?fields=name,username,profile_pic&access_token=${IG_ACCESS_TOKEN}`;
+    
+    try {
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data;
+    } catch (e) {
         return null;
     }
 }
 
-// --- INSTAGRAM PAYLOAD CONSTRUCTORS ---
+// --- PAYLOAD CONSTRUCTORS (TEXT ONLY) ---
 
 const constructTextMessage = (recipientId, text) => {
     return {
         recipient: { id: recipientId },
         message: { text: text }
-    };
-};
-
-const constructQuickReplyMessage = (recipientId, text, quickReplies) => {
-    return {
-        recipient: { id: recipientId },
-        message: {
-            text: text,
-            quick_replies: quickReplies.map(qr => ({
-                content_type: 'text',
-                title: qr.title.substring(0, 20),
-                payload: qr.payload
-            }))
-        }
-    };
-};
-
-const constructGenericTemplate = (recipientId, elements) => {
-    return {
-        recipient: { id: recipientId },
-        message: {
-            attachment: {
-                type: 'template',
-                payload: {
-                    template_type: 'generic',
-                    elements: elements.slice(0, 10)
-                }
-            }
-        }
     };
 };
 
@@ -157,7 +152,7 @@ const constructSenderAction = (recipientId, action) => {
     };
 };
 
-// --- AI LOGIC using KIE API (fetch) ---
+// --- AI LOGIC using @google/genai ---
 async function generateAiResponse(conversationHistory, productCatalog) {
     try {
         const productContext = productCatalog.map(p => 
@@ -165,84 +160,55 @@ async function generateAiResponse(conversationHistory, productCatalog) {
         ).join('\n');
 
         const systemInstruction = `
-            You are "Hewdes Bot", the AI assistant for Hewdes Gifts.
+            You are "Hewdes Bot", the AI assistant for Hewdes Gifts on Instagram.
             
-            YOUR GOAL: Help customers find gifts or answer questions.
+            YOUR GOAL: Help customers find gifts, answer questions about products, and close sales.
             
             PRODUCT CATALOG:
             ${productContext}
             
             OUTPUT RULES:
-            You must output a strictly valid JSON object adhering to the schema below.
-            Do NOT output markdown code blocks. Just the raw JSON.
-            
-            Schema:
-            {
-                "intent": "TEXT_REPLY" | "SHOW_PRODUCTS" | "ASK_WITH_OPTIONS",
-                "text": "The text message content",
-                "productIds": ["id1", "id2"], // Only if intent is SHOW_PRODUCTS
-                "options": [{"title": "Yes", "payload": "YES"}, {"title": "No", "payload": "NO"}] // Only if intent is ASK_WITH_OPTIONS
-            }
+            1. You must respond with clear, friendly TEXT only.
+            2. Do NOT use JSON, Markdown code blocks, or HTML.
+            3. Keep responses concise (under 300 characters is best for Instagram).
+            4. If suggesting a product, mention its name and price.
+            5. Do NOT try to create buttons or carousels. Just describe the items.
         `;
 
+        // Filter and map history to Gemini format
+        // Gemini expects roles: 'user' or 'model'
         const historyForModel = conversationHistory.slice(-5).map(m => {
-            const role = m.role === 'model' ? 'assistant' : 'user';
-            const text = m.type === 'template' ? "Sent product cards" : (m.content || "");
-            return { role, content: text };
+            const role = m.role === 'assistant' || m.role === 'model' ? 'model' : 'user';
+            return { 
+                role: role, 
+                parts: [{ text: m.content || "" }] 
+            };
         });
 
-        const messages = [
-            { role: "system", content: systemInstruction },
-            ...historyForModel
-        ];
-
-        // Call KIE API
-        const response = await fetch(KIE_ENDPOINT, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${KIE_API_KEY}`
-            },
-            body: JSON.stringify({
-                messages: messages,
+        // Use the official SDK to generate content
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: historyForModel,
+            config: {
+                systemInstruction: systemInstruction,
                 temperature: 0.7,
-                response_format: { type: "json_object" } // Enforce JSON response if supported by provider
-            })
+                maxOutputTokens: 300, 
+            },
         });
 
-        if (!response.ok) {
-            const err = await response.text();
-            console.error("KIE API Error:", err);
-            throw new Error(`KIE API responded with ${response.status}`);
-        }
-
-        const data = await response.json();
-        const rawContent = data.choices?.[0]?.message?.content;
-
-        if (rawContent) {
-            try {
-                // Remove any potential markdown formatting ```json ... ```
-                const cleanJson = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
-                return JSON.parse(cleanJson);
-            } catch (e) {
-                console.error("Failed to parse JSON from AI:", rawContent);
-                return { intent: "TEXT_REPLY", text: rawContent }; // Fallback
-            }
-        }
-        
-        return { intent: "TEXT_REPLY", text: "I apologize, I'm having trouble connecting right now." };
+        return response.text || "I'm having trouble thinking of a response.";
 
     } catch (e) {
         console.error("AI Generation Error:", e);
-        return { intent: "TEXT_REPLY", text: "System is busy. Please try again later." };
+        return "I'm a bit busy right now. Please try again in a moment.";
     }
 }
 
 // --- CORE LOGIC: Handle Incoming & Dispatch Outgoing ---
-async function handleIncomingMessageFlow(platform, senderId, incomingData) {
-    if (!senderId) return;
+async function handleIncomingMessageFlow(senderId, incomingData, injectedProfile = null) {
+    if (!senderId) return null;
 
-    // 1. CRM Lookup / Create (Section 6.2)
+    // 1. CRM Lookup / Create
     let conversation = conversationsStore.find(c => c.igsid === senderId);
     
     if (!conversation) {
@@ -250,13 +216,16 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
         let profileAvatar = `https://ui-avatars.com/api/?name=User+${senderId.slice(-4)}&background=random`;
         let igUsername = null;
 
-        // --- INSTAGRAM PROFILE FETCH LOGIC ---
-        if (platform === 'instagram') {
+        // Use injected profile if provided (Simulator), otherwise fetch real profile
+        if (injectedProfile) {
+            if (injectedProfile.name) profileName = injectedProfile.name;
+            if (injectedProfile.profile_pic) profileAvatar = injectedProfile.profile_pic;
+            if (injectedProfile.username) igUsername = injectedProfile.username;
+        } else {
             const profileData = await fetchInstagramProfile(senderId);
             if (profileData) {
                 if (profileData.name) profileName = profileData.name;
                 else if (profileData.username) profileName = profileData.username;
-                
                 if (profileData.profile_pic) profileAvatar = profileData.profile_pic;
                 igUsername = profileData.username;
             }
@@ -266,14 +235,11 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
             id: Date.now().toString(),
             igsid: senderId,
             customerName: profileName,
-            platform: platform,
+            platform: 'instagram',
             lastMessage: "",
             lastMessageTime: Date.now(),
             unreadCount: 0,
-            tags: [
-                { id: 'new', label: 'New Lead', color: 'bg-blue-100 text-blue-700' },
-                ...(platform === 'instagram' ? [{ id: 'ig', label: 'Instagram', color: 'bg-pink-100 text-pink-700' }] : [])
-            ],
+            tags: [{ id: 'new', label: 'New Lead', color: 'bg-blue-100 text-blue-700' }],
             isAiPaused: false,
             status: 'active',
             avatarUrl: profileAvatar,
@@ -281,25 +247,26 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
         };
         conversationsStore.unshift(conversation);
     } else {
-        // Move to top to indicate recent activity
         conversationsStore = conversationsStore.filter(c => c.id !== conversation.id);
         conversationsStore.unshift(conversation);
         conversation.unreadCount += 1;
+        
+        // Update profile in CRM if simulation provides new data
+        if (injectedProfile) {
+            if (injectedProfile.name) conversation.customerName = injectedProfile.name;
+            if (injectedProfile.profile_pic) conversation.avatarUrl = injectedProfile.profile_pic;
+        }
     }
 
-    // 2. Process Specific Event Types (PDF Section 3 & 4)
+    // 2. Parse Incoming Content
     let userMessageContent = "";
     let messageType = 'text';
 
     if (incomingData.message?.text) {
         userMessageContent = incomingData.message.text;
-    } 
-    else if (incomingData.message?.attachments) {
+    } else {
+        userMessageContent = "[Media/Attachment Sent]";
         messageType = 'image';
-        userMessageContent = "Sent an attachment";
-    }
-    else if (incomingData.postback) {
-        userMessageContent = incomingData.postback.title || incomingData.postback.payload;
     }
 
     conversation.lastMessage = userMessageContent;
@@ -313,116 +280,70 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
         type: messageType
     });
 
-    // 3. AI Processing (Strict Output Formatting)
+    // 3. AI Processing (Text Only)
+    let aiText = null;
     if (!conversation.isAiPaused) {
         // Send Typing Indicator
-        const typingPayload = constructSenderAction(senderId, 'typing_on');
-        addSystemLog('POST', 'https://graph.facebook.com/v18.0/me/messages', 200, 'Typing Indicator', platform, typingPayload);
+        await callInstagramApi(constructSenderAction(senderId, 'typing_on'));
 
-        // Call Gemini via KIE
-        const aiDecision = await generateAiResponse(conversation.messages, PRODUCT_CATALOG);
-        let finalPayload = {};
-        let storedMessage = {
+        // Generate AI Response
+        aiText = await generateAiResponse(conversation.messages, PRODUCT_CATALOG);
+
+        // Send Text Response
+        await callInstagramApi(constructTextMessage(senderId, aiText));
+        
+        conversation.messages.push({
             id: (Date.now() + 1).toString(),
             role: 'model',
             timestamp: Date.now(),
-            content: aiDecision.text,
+            content: aiText,
             type: 'text'
-        };
-
-        // Construct Payload based on Intent
-        if (aiDecision.intent === 'SHOW_PRODUCTS' && aiDecision.productIds) {
-            const elements = aiDecision.productIds.map(pid => {
-                const prod = PRODUCT_CATALOG.find(p => p.id === pid);
-                if (!prod) return null;
-                return {
-                    title: prod.name,
-                    subtitle: `₹${prod.price}`,
-                    image_url: prod.imageUrl,
-                    buttons: [
-                        { type: "postback", title: "View", payload: `VIEW_${prod.id}` },
-                        { type: "postback", title: "Buy", payload: `ADD_${prod.id}` }
-                    ]
-                };
-            }).filter(Boolean);
-
-            if (elements.length > 0) {
-                finalPayload = constructGenericTemplate(senderId, elements);
-                storedMessage.type = 'template';
-                storedMessage.attachments = [{
-                    type: 'template',
-                    payload: { template_type: 'generic', elements }
-                }];
-            } else {
-                finalPayload = constructTextMessage(senderId, aiDecision.text);
-            }
-        } 
-        else if (aiDecision.intent === 'ASK_WITH_OPTIONS' && aiDecision.options) {
-            finalPayload = constructQuickReplyMessage(senderId, aiDecision.text, aiDecision.options);
-            storedMessage.type = 'quick_reply';
-            storedMessage.quick_replies = aiDecision.options.map(o => ({
-                content_type: 'text',
-                title: o.title,
-                payload: o.payload
-            }));
-        } 
-        else {
-            finalPayload = constructTextMessage(senderId, aiDecision.text);
-        }
-
-        // "Send" (Log and Store)
-        addSystemLog('POST', 'https://graph.facebook.com/v18.0/me/messages', 200, 'Message Sent', platform, finalPayload);
-        
-        conversation.messages.push(storedMessage);
-        conversation.lastMessage = storedMessage.content || "Sent an attachment";
+        });
+        conversation.lastMessage = aiText;
     }
+
+    return aiText;
 }
 
 // --- WEBHOOK HANDLER ---
-const handleWebhookEvent = async (req, res, platform) => {
+const handleWebhookEvent = async (req, res) => {
   const body = req.body;
-  addSystemLog('POST', req.url, 200, 'Webhook Received', platform, body);
+  
+  // Log receipt
+  if (body.object) {
+      addSystemLog('POST', req.url, 200, 'Webhook Received', 'instagram', body);
+  }
 
-  // Parse Standard Meta Payload
+  // Parse Instagram Payload
   if (body.object === 'instagram' || body.object === 'page') {
       if (Array.isArray(body.entry)) {
           for (const entry of body.entry) {
               if (Array.isArray(entry.messaging)) {
                   for (const event of entry.messaging) {
                       const senderId = event.sender?.id;
-                      if (senderId) {
-                          await handleIncomingMessageFlow(platform, senderId, event);
+                      // Ignore echoes (messages sent by the page)
+                      if (senderId && !event.message?.is_echo) {
+                          await handleIncomingMessageFlow(senderId, event);
                       }
                   }
               }
           }
       }
   }
-  // Support for legacy/simulated simple format
-  else if (body.field === 'messages' && body.value) {
-      const senderId = body.value.sender?.id;
-      const simulatedEvent = {
-          sender: body.value.sender,
-          message: body.value.message,
-          timestamp: body.value.timestamp
-      };
-      if (senderId) {
-           await handleIncomingMessageFlow(platform, senderId, simulatedEvent);
-      }
-  }
 
   res.status(200).send('EVENT_RECEIVED');
 };
 
-const handleWebhookVerification = (req, res, platform) => {
+const handleWebhookVerification = (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
+  
   if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
-      addSystemLog('GET', req.url, 200, 'Verification Success', platform, req.query);
+      addSystemLog('GET', req.url, 200, 'Verification Success', 'instagram', req.query);
       res.status(200).send(challenge);
   } else {
-      addSystemLog('GET', req.url, 403, 'Verification Failed', platform, req.query);
+      addSystemLog('GET', req.url, 403, 'Verification Failed', 'instagram', req.query);
       res.sendStatus(403);
   }
 };
@@ -435,12 +356,13 @@ app.get('/api/conversations', (req, res) => {
 
 // Endpoint to update tokens from Settings UI
 app.post('/api/config', (req, res) => {
-    const { igToken, waToken } = req.body;
+    const { igToken, graphVersion } = req.body;
     if (igToken !== undefined) {
         IG_ACCESS_TOKEN = igToken;
-        console.log(`[CONFIG] IG Token updated via API.`);
+        console.log(`[CONFIG] IG Token updated.`);
     }
-    if (waToken !== undefined) WA_ACCESS_TOKEN = waToken;
+    if (graphVersion !== undefined) GRAPH_VERSION = graphVersion;
+
     res.json({ success: true, message: 'Configuration updated in memory.' });
 });
 
@@ -459,6 +381,10 @@ app.post('/api/conversations/:id/message', (req, res) => {
         conv.lastMessage = text;
         conv.lastMessageTime = Date.now();
         conv.isAiPaused = true; 
+        
+        // Human Override -> Send via Graph API
+        callInstagramApi(constructTextMessage(conv.igsid, text));
+
         res.json({ success: true });
     } else {
         res.status(404).json({ error: "Not found" });
@@ -476,13 +402,70 @@ app.post('/api/conversations/:id/pause', (req, res) => {
     }
 });
 
-app.get('/webhook/instagram', (req, res) => handleWebhookVerification(req, res, 'instagram'));
-app.post('/webhook/instagram', (req, res) => handleWebhookEvent(req, res, 'instagram'));
-app.get('/webhook/whatsapp', (req, res) => handleWebhookVerification(req, res, 'whatsapp'));
-app.post('/webhook/whatsapp', (req, res) => handleWebhookEvent(req, res, 'whatsapp'));
+// --- DEVELOPER SIMULATION ENDPOINT ---
+app.post('/api/dev/simulate', async (req, res) => {
+    try {
+        const { payload, profileResponse, graphVersion, accessToken } = req.body;
+        
+        let parsedPayload, parsedProfile;
+        try { parsedPayload = JSON.parse(payload); } catch(e) { throw new Error("Invalid Payload JSON"); }
+        try { parsedProfile = JSON.parse(profileResponse); } catch(e) { throw new Error("Invalid Profile JSON"); }
 
-app.get('/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM Server is Running' }));
-app.get('/api/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM Server is Running' }));
+        const entry = parsedPayload.entry?.[0];
+        const messaging = entry?.messaging?.[0];
+        
+        if (!messaging?.sender?.id || !messaging?.message?.text) {
+             throw new Error("Invalid Webhook Structure. Sender ID or Message Text missing.");
+        }
+        
+        const senderId = messaging.sender.id;
+
+        // EXECUTE REAL LOGIC WITH INJECTED PROFILE
+        // This updates conversationsStore in-memory, so CRM page will see it.
+        const aiResponseText = await handleIncomingMessageFlow(senderId, messaging, parsedProfile);
+
+        // Construct Response for UI Visualization
+        const responseData = {
+            parsedFields: {
+                object: parsedPayload.object || 'instagram',
+                entryId: entry?.id || 'UNKNOWN',
+                entryTime: entry?.time || Date.now(),
+                senderId: senderId,
+                recipientId: messaging.recipient?.id,
+                messageId: messaging.message.mid,
+                messageText: messaging.message.text
+            },
+            profileRequest: {
+                url: `https://graph.facebook.com/${graphVersion || 'v21.0'}/${senderId}?fields=name,profile_pic&access_token=${accessToken || 'ACCESS_TOKEN'}`,
+                method: "GET",
+                mockResponse: parsedProfile
+            },
+            aiContext: {
+                userName: parsedProfile.name,
+                userMessage: messaging.message.text
+            },
+            aiResponse: aiResponseText || "AI Paused or No Response",
+            graphApiPayload: {
+                recipient: { id: senderId },
+                message: { text: aiResponseText || "..." }
+            }
+        };
+
+        res.json(responseData);
+
+    } catch (e) {
+        console.error("Simulation Error", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Single Webhook Endpoint for Instagram
+app.get('/webhook/instagram', handleWebhookVerification);
+app.post('/webhook/instagram', handleWebhookEvent);
+
+// Removed WhatsApp Routes
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM Server is Running', environment: process.env.K_SERVICE ? 'Cloud Run' : 'Local/Other', region: process.env.K_REVISION || 'N/A' }));
+app.get('/api/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM Server is Running', environment: process.env.K_SERVICE ? 'Cloud Run' : 'Local/Other', region: process.env.K_REVISION || 'N/A' }));
 app.get('/api/logs', (req, res) => res.json(systemLogs));
 
 app.get('/', (req, res) => {
@@ -527,5 +510,5 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(BANNER);
   console.log(`[SYSTEM] Server listening on port ${PORT}`);
-  console.log(`[SYSTEM] In-Memory DB Active. Send webhooks to /webhook/instagram`);
+  console.log(`[SYSTEM] Instagram CRM Mode Active.`);
 });
