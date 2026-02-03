@@ -34,7 +34,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 // --- IN-MEMORY DATABASE ---
 let conversationsStore = []; 
 let systemLogs = [];
-const MAX_LOGS = 50;
+const MAX_LOGS = 100; // Increased to hold more trace data
 
 // --- DYNAMIC CONFIGURATION (In-Memory) ---
 let IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || '';
@@ -105,7 +105,7 @@ async function callInstagramApi(payload) {
         const resData = await response.json();
         
         if (!response.ok) {
-             addSystemLog('POST', url, response.status, 'Graph API Error', 'instagram', resData);
+             addSystemLog('POST', url, response.status, 'Graph API Error', 'instagram', { request: payload, errorResponse: resData });
              console.error(`[API-OUT] Error:`, resData);
              return { success: false, error: resData };
         }
@@ -122,16 +122,28 @@ async function callInstagramApi(payload) {
 
 // --- INSTAGRAM API HELPER ---
 async function fetchInstagramProfile(igsid) {
-    if (!IG_ACCESS_TOKEN) return null;
+    if (!IG_ACCESS_TOKEN) {
+        addSystemLog('GET', 'https://graph.instagram.com/...', 0, 'Skipped Profile Fetch (No Token)', 'system', { igsid });
+        return null;
+    }
     
     const url = `https://graph.instagram.com/${GRAPH_VERSION}/${igsid}?fields=name,username,profile_pic&access_token=${IG_ACCESS_TOKEN}`;
     
     try {
+        // Log the start of the call
+        addSystemLog('GET', url, 0, 'Fetching Profile Details', 'system', { targetId: igsid });
+        
         const response = await fetch(url);
-        if (!response.ok) return null;
         const data = await response.json();
+        
+        if (!response.ok) {
+             addSystemLog('GET', url, response.status, 'Profile Fetch Failed', 'system', data);
+             return null;
+        }
+        addSystemLog('GET', url, 200, 'Profile Details Received', 'system', data);
         return data;
     } catch (e) {
+        addSystemLog('GET', url, 500, 'Profile Fetch Error', 'system', { error: e.message });
         return null;
     }
 }
@@ -176,7 +188,6 @@ async function generateAiResponse(conversationHistory, productCatalog) {
         `;
 
         // Filter and map history to Gemini format
-        // Gemini expects roles: 'user' or 'model'
         const historyForModel = conversationHistory.slice(-5).map(m => {
             const role = m.role === 'assistant' || m.role === 'model' ? 'model' : 'user';
             return { 
@@ -208,21 +219,23 @@ async function generateAiResponse(conversationHistory, productCatalog) {
 async function handleIncomingMessageFlow(senderId, incomingData) {
     if (!senderId) return;
 
-    // 1. CRM Lookup / Create
+    // 1. Fetch Profile (Executed every time to show flow in logs as requested)
+    let profileData = null;
+    if (IG_ACCESS_TOKEN) {
+         profileData = await fetchInstagramProfile(senderId);
+    }
+
+    // 2. CRM Lookup / Create or Update
     let conversation = conversationsStore.find(c => c.igsid === senderId);
     
     if (!conversation) {
         let profileName = `User ${senderId.slice(-4)}`;
         let profileAvatar = `https://ui-avatars.com/api/?name=User+${senderId.slice(-4)}&background=random`;
-        let igUsername = null;
 
-        // Fetch Real Profile
-        const profileData = await fetchInstagramProfile(senderId);
         if (profileData) {
             if (profileData.name) profileName = profileData.name;
             else if (profileData.username) profileName = profileData.username;
             if (profileData.profile_pic) profileAvatar = profileData.profile_pic;
-            igUsername = profileData.username;
         }
 
         conversation = {
@@ -241,12 +254,17 @@ async function handleIncomingMessageFlow(senderId, incomingData) {
         };
         conversationsStore.unshift(conversation);
     } else {
+        // Update profile details if fetched
+        if (profileData) {
+             if (profileData.name) conversation.customerName = profileData.name;
+             if (profileData.profile_pic) conversation.avatarUrl = profileData.profile_pic;
+        }
         conversationsStore = conversationsStore.filter(c => c.id !== conversation.id);
         conversationsStore.unshift(conversation);
         conversation.unreadCount += 1;
     }
 
-    // 2. Parse Incoming Content
+    // 3. Parse Incoming Content
     let userMessageContent = "";
     let messageType = 'text';
 
@@ -268,7 +286,7 @@ async function handleIncomingMessageFlow(senderId, incomingData) {
         type: messageType
     });
 
-    // 3. AI Processing (Text Only)
+    // 4. AI Processing (Text Only)
     if (!conversation.isAiPaused) {
         // Send Typing Indicator
         await callInstagramApi(constructSenderAction(senderId, 'typing_on'));
@@ -296,7 +314,7 @@ const handleWebhookEvent = async (req, res) => {
   
   // Log receipt
   if (body.object) {
-      addSystemLog('POST', req.url, 200, 'Webhook Received', 'instagram', body);
+      addSystemLog('POST', req.url, 200, 'Webhook Input Received', 'instagram', body);
   }
 
   // Parse Instagram Payload
@@ -390,50 +408,13 @@ app.post('/api/conversations/:id/pause', (req, res) => {
 // --- DEVELOPER SIMULATION ENDPOINT ---
 app.post('/api/dev/simulate', async (req, res) => {
     try {
+        // Basic Loopback for testing
         const body = req.body;
-        // Basic extraction for simulation - expects standard Meta/Instagram format
-        let senderId = null;
-        let messageText = null;
-
-        // Extract specifics based on the table requirements
-        const entry = body.entry?.[0];
-        const messaging = entry?.messaging?.[0];
-
-        if (messaging) {
-            senderId = messaging.sender?.id;
-            messageText = messaging.message?.text;
-        }
-
-        if (!senderId || !messageText) {
-             return res.status(400).json({ error: "Invalid Webhook Format. Could not find sender.id or message.text" });
-        }
-
-        // Detailed Parsing for Developer UI
-        const parsedFields = {
-            object: body.object,
-            entryId: entry?.id,
-            entryTime: entry?.time,
-            senderId: messaging?.sender?.id,
-            recipientId: messaging?.recipient?.id,
-            messageId: messaging?.message?.mid,
-            messageText: messaging?.message?.text
-        };
-
-        // Construct a single turn history for simulation
-        // const history = [{ role: 'user', content: messageText, type: 'text', timestamp: Date.now() }];
-        
-        // BYPASS AI CALL: Return static response as requested for developer testing
-        const aiText = "AI Response";
-        
-        // Construct the output payload that would be sent to Graph API
-        const graphPayload = constructTextMessage(senderId, aiText);
-
-        res.json({
-            parsedFields, // Return the detailed breakout
-            aiResponse: aiText,
-            graphApiPayload: graphPayload
+        await handleWebhookEvent(req, {
+             status: (c) => ({ send: (msg) => {} }),
+             sendStatus: (c) => {}
         });
-
+        res.json({ success: true });
     } catch (e) {
         console.error("Simulation Error", e);
         res.status(500).json({ error: e.message });

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Page } from '../types';
-import { LayoutDashboard, MessageSquareText, ShoppingBag, Settings, LogOut, Gift, Code, FlaskConical } from 'lucide-react';
+import { LayoutDashboard, MessageSquareText, ShoppingBag, Settings, LogOut, Gift, Code, FlaskConical, Activity } from 'lucide-react';
 
 interface SidebarProps {
   currentPage: Page;
@@ -59,8 +59,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
                 : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white'
             }`}
         >
-          <FlaskConical size={20} />
-          <span>Developer Test</span>
+          <Activity size={20} />
+          <span>Live Monitor</span>
         </button>
 
         <button 
