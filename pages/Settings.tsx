@@ -22,7 +22,7 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
   const [showKey, setShowKey] = useState(false);
 
   // Platform Credentials State (Instagram Only)
-  const [igCreds, setIgCreds] = useState<PlatformCredentials>(() => JSON.parse(localStorage.getItem('ig_creds') || '{"appId":"","token":"","graphVersion":"v21.0"}'));
+  const [igCreds, setIgCreds] = useState<PlatformCredentials>(() => JSON.parse(localStorage.getItem('ig_creds') || '{"appId":"","token":"","graphVersion":"v24.0"}'));
   const [showTokens, setShowTokens] = useState(false);
 
   const WEBHOOK_VERIFY_TOKEN = 'hewdes_rttf0kd11o1axrmc';
@@ -40,7 +40,7 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
   };
 
   const handleSaveCreds = async () => {
-    if (!igCreds.graphVersion) igCreds.graphVersion = "v21.0";
+    if (!igCreds.graphVersion) igCreds.graphVersion = "v24.0";
 
     localStorage.setItem('ig_creds', JSON.stringify(igCreds));
     
@@ -197,14 +197,15 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                     <div>
                         <label className="block text-xs font-medium text-slate-500 mb-1">Graph API Version</label>
                         <select 
-                            value={igCreds.graphVersion || 'v21.0'}
+                            value={igCreds.graphVersion || 'v24.0'}
                             onChange={(e) => setIgCreds({...igCreds, graphVersion: e.target.value})}
                             className="w-full px-3 py-2 border border-gray-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none"
                         >
                             <option value="v18.0">v18.0 (Legacy)</option>
                             <option value="v19.0">v19.0 (Stable)</option>
-                            <option value="v20.0">v20.0 (Latest)</option>
-                            <option value="v21.0">v21.0 (Beta)</option>
+                            <option value="v20.0">v20.0</option>
+                            <option value="v21.0">v21.0</option>
+                            <option value="v24.0">v24.0 (Latest)</option>
                         </select>
                     </div>
                 </div>
@@ -218,7 +219,7 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
                         <div className="flex">
                             <span className="text-purple-400 w-16">POST</span>
                             <span className="text-green-400">
-                                https://graph.facebook.com/{igCreds.graphVersion || 'v21.0'}/me/messages
+                                https://graph.facebook.com/{igCreds.graphVersion || 'v24.0'}/me/messages
                             </span>
                         </div>
                         <div className="flex">

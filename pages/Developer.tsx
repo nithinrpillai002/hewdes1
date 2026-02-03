@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, RotateCcw, Copy, Check, Terminal, FileJson, AlertCircle, User, Bot, ArrowDown, Code, Hash, Clock, Send as SendIcon, MessageSquare, Building2, Fingerprint, ArrowRight, Link as LinkIcon, Shield, Globe, Activity, Cloud, Server, Wifi } from 'lucide-react';
+import { Play, RotateCcw, Copy, Check, Terminal, FileJson, AlertCircle, User, Bot, ArrowDown, Code, Hash, Clock, Send as SendIcon, MessageSquare, Building2, Fingerprint, ArrowRight, Link as LinkIcon, Shield } from 'lucide-react';
 
 const DEFAULT_WEBHOOK_PAYLOAD = {
   "object": "instagram",
@@ -38,7 +38,6 @@ const Developer: React.FC = () => {
   const [profileResponse, setProfileResponse] = useState(JSON.stringify(DEFAULT_PROFILE_RESPONSE, null, 2));
   const [accessToken, setAccessToken] = useState("EAAG...");
   const [manualUserId, setManualUserId] = useState("1234567890");
-  const [graphVersion, setGraphVersion] = useState("v21.0");
 
   // State
   const [result, setResult] = useState<any>(null);
@@ -46,10 +45,6 @@ const Developer: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [showRawOutput, setShowRawOutput] = useState(false);
   const [activeTab, setActiveTab] = useState<'payload' | 'profile'>('payload');
-
-  // Diagnostics State
-  const [healthStatus, setHealthStatus] = useState<{status: string, env: string, region: string, latency: number} | null>(null);
-  const [checkingHealth, setCheckingHealth] = useState(false);
 
   // Auto-update User ID when payload changes
   useEffect(() => {
@@ -60,53 +55,59 @@ const Developer: React.FC = () => {
     } catch (e) {}
   }, [payload]);
 
-  const checkCloudRunHealth = async () => {
-      setCheckingHealth(true);
-      const start = Date.now();
-      try {
-          const res = await fetch('/api/health');
-          const latency = Date.now() - start;
-          if (res.ok) {
-              const data = await res.json();
-              setHealthStatus({ 
-                  status: 'Online', 
-                  env: data.environment || 'Unknown',
-                  region: data.region || 'N/A',
-                  latency: latency
-              });
-          } else {
-              setHealthStatus({ status: 'Error', env: 'Unreachable', region: 'N/A', latency: latency });
-          }
-      } catch (e) {
-          setHealthStatus({ status: 'Offline', env: 'Network Fail', region: 'N/A', latency: Date.now() - start });
-      } finally {
-          setCheckingHealth(false);
-      }
-  };
-
   const handleTest = async () => {
     setLoading(true);
     setResult(null);
     try {
-      // Send data to server for real simulation
-      const res = await fetch('/api/dev/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            payload: payload,
-            profileResponse: profileResponse,
-            graphVersion: graphVersion,
-            accessToken: accessToken
-        })
-      });
+      // 1. Parse Webhook
+      const parsedPayload = JSON.parse(payload);
+      
+      // Client-Side Simulation Delay
+      await new Promise(resolve => setTimeout(resolve, 800)); 
 
-      const data = await res.json();
-      
-      if (!res.ok) {
-          throw new Error(data.error || "Server Simulation Failed");
+      const entry = parsedPayload.entry?.[0];
+      const messaging = entry?.messaging?.[0];
+
+      if (!messaging?.sender?.id || !messaging?.message?.text) {
+          throw new Error("Invalid Webhook Structure: Could not find sender.id or message.text");
       }
-      
-      setResult(data);
+
+      // 2. Parse Profile Mock
+      let parsedProfile = null;
+      try {
+          parsedProfile = JSON.parse(profileResponse);
+      } catch (e) {
+          throw new Error("Invalid Profile Mock JSON");
+      }
+
+      // 3. Construct the response locally
+      const mockResult = {
+          parsedFields: {
+              object: parsedPayload.object || 'instagram',
+              entryId: entry?.id || 'UNKNOWN_ID',
+              entryTime: entry?.time || Date.now(),
+              senderId: messaging.sender.id,
+              recipientId: messaging.recipient?.id || 'UNKNOWN_RECIPIENT',
+              messageId: messaging.message.mid || 'UNKNOWN_MID',
+              messageText: messaging.message.text
+          },
+          profileRequest: {
+              url: `https://graph.facebook.com/v18.0/${manualUserId}?fields=name,profile_pic&access_token=${accessToken}`,
+              method: "GET",
+              mockResponse: parsedProfile
+          },
+          aiContext: {
+              userName: parsedProfile.name || "Unknown User",
+              userMessage: messaging.message.text
+          },
+          aiResponse: `Hi ${parsedProfile.name || 'there'}! I can definitely help you with that product inquiry.`,
+          graphApiPayload: {
+              recipient: { id: messaging.sender.id },
+              message: { text: `Hi ${parsedProfile.name || 'there'}! I can definitely help you with that product inquiry.` }
+          }
+      };
+
+      setResult(mockResult);
 
     } catch (e: any) {
       setResult({ error: e.message || "Invalid JSON or Logic Error" });
@@ -157,7 +158,7 @@ const Developer: React.FC = () => {
                     Developer Flow
                 </h2>
                 <p className="text-slate-500 dark:text-slate-400 mt-1">
-                    Simulate webhook events. This injects data directly into the CRM for testing.
+                    Simulate webhook events Client-Side (Cloud Run Safe Mode).
                 </p>
             </div>
             <div className="flex space-x-3">
@@ -213,77 +214,8 @@ const Developer: React.FC = () => {
                 ) : (
                     <div className="p-6 space-y-6 h-full overflow-y-auto">
                         
-                        {/* Cloud Run Diagnostics Panel (Only visible on Profile Tab for space) */}
-                        <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700 mb-6">
-                            <div className="flex items-center justify-between mb-3">
-                                <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center">
-                                    <Cloud size={14} className="mr-2 text-sky-500" />
-                                    Cloud Run Diagnostics
-                                </h3>
-                                <button 
-                                    onClick={checkCloudRunHealth}
-                                    disabled={checkingHealth}
-                                    className="text-[10px] bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 px-2 py-1 rounded-full font-medium flex items-center hover:bg-sky-200 dark:hover:bg-sky-900/50 transition-colors"
-                                >
-                                    {checkingHealth ? 'Pinging...' : 'Test Connectivity'}
-                                </button>
-                            </div>
-                            
-                            {healthStatus ? (
-                                <div className="grid grid-cols-2 gap-2 text-xs">
-                                    <div className="bg-white dark:bg-slate-800 p-2 rounded border border-gray-100 dark:border-slate-700">
-                                        <span className="block text-slate-400 mb-0.5">Status</span>
-                                        <span className={`font-bold ${healthStatus.status === 'Online' ? 'text-green-600' : 'text-red-600'}`}>
-                                            {healthStatus.status}
-                                        </span>
-                                    </div>
-                                    <div className="bg-white dark:bg-slate-800 p-2 rounded border border-gray-100 dark:border-slate-700">
-                                        <span className="block text-slate-400 mb-0.5">Latency</span>
-                                        <span className="font-mono text-slate-700 dark:text-slate-300">{healthStatus.latency}ms</span>
-                                    </div>
-                                    <div className="bg-white dark:bg-slate-800 p-2 rounded border border-gray-100 dark:border-slate-700 col-span-2">
-                                        <span className="block text-slate-400 mb-0.5">Environment</span>
-                                        <div className="flex items-center justify-between">
-                                            <span className="font-medium text-slate-800 dark:text-white">{healthStatus.env}</span>
-                                            {healthStatus.env === 'Cloud Run' && <Check size={12} className="text-sky-500" />}
-                                        </div>
-                                        {healthStatus.region !== 'N/A' && (
-                                            <span className="block mt-1 text-[10px] font-mono text-slate-400">{healthStatus.region}</span>
-                                        )}
-                                    </div>
-                                </div>
-                            ) : (
-                                <p className="text-xs text-slate-400 text-center py-2">
-                                    Click to verify if backend is reachable.
-                                </p>
-                            )}
-                        </div>
-
                         <div className="space-y-4">
-                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">GET Request Configuration</h3>
-                            
-                            <div>
-                                <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">Graph API Version</label>
-                                <div className="relative">
-                                    <input 
-                                        type="text" 
-                                        list="api-versions"
-                                        value={graphVersion}
-                                        onChange={(e) => setGraphVersion(e.target.value)}
-                                        className="w-full pl-8 pr-3 py-2 bg-slate-100 dark:bg-slate-800 border-none rounded-lg text-sm text-slate-800 dark:text-white font-mono"
-                                        placeholder="v21.0"
-                                    />
-                                    <Globe size={14} className="absolute left-2.5 top-2.5 text-slate-400"/>
-                                    <datalist id="api-versions">
-                                        <option value="v21.0" />
-                                        <option value="v20.0" />
-                                        <option value="v19.0" />
-                                        <option value="v18.0" />
-                                    </datalist>
-                                </div>
-                                <p className="text-[10px] text-slate-400 mt-1">Select standard or type custom version.</p>
-                            </div>
-
+                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">GET Request Params</h3>
                             <div>
                                 <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">IG User ID (IGSID)</label>
                                 <div className="relative">
@@ -329,7 +261,7 @@ const Developer: React.FC = () => {
 
         {/* RIGHT: FLOW OUTPUT */}
         <div className="w-7/12 flex flex-col bg-slate-50 dark:bg-slate-900/30">
-            {result && !result.error ? (
+            {result ? (
                 <div className="flex-1 overflow-y-auto p-8">
                      
                      {/* Flow Step 1: Payload Analysis */}
@@ -386,7 +318,7 @@ const Developer: React.FC = () => {
                             <div className="bg-white dark:bg-slate-800 rounded-xl border border-purple-200 dark:border-purple-800/50 shadow-sm overflow-hidden mb-4">
                                 <div className="bg-purple-50 dark:bg-purple-900/20 px-4 py-2 border-b border-purple-100 dark:border-purple-800 flex items-center">
                                     <span className="text-xs font-bold text-purple-700 dark:text-purple-300 uppercase tracking-wide mr-2">GET</span>
-                                    <span className="text-xs font-mono text-purple-600 dark:text-purple-400 truncate">graph.facebook.com/{graphVersion}/...</span>
+                                    <span className="text-xs font-mono text-purple-600 dark:text-purple-400 truncate">graph.facebook.com/v18.0/...</span>
                                 </div>
                                 <div className="p-4 bg-slate-900 overflow-x-auto">
                                     <code className="text-xs font-mono text-green-400 whitespace-nowrap">
@@ -412,7 +344,6 @@ const Developer: React.FC = () => {
                                     />
                                     <span className="font-bold text-sm text-slate-800 dark:text-white">{result.profileRequest.mockResponse.name}</span>
                                     <span className="text-xs text-slate-400">ID: {result.profileRequest.mockResponse.id}</span>
-                                    <span className="text-[10px] text-green-600 dark:text-green-400 mt-1 font-bold">Added to CRM ✓</span>
                                 </div>
                             </div>
                         </div>

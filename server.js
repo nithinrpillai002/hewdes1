@@ -38,7 +38,7 @@ const MAX_LOGS = 50;
 
 // --- DYNAMIC CONFIGURATION (In-Memory) ---
 let IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || '';
-let GRAPH_VERSION = "v21.0"; 
+let GRAPH_VERSION = "v24.0"; 
 
 // --- PRODUCT CATALOG (Mock Database) ---
 const PRODUCT_CATALOG = [
@@ -205,8 +205,8 @@ async function generateAiResponse(conversationHistory, productCatalog) {
 }
 
 // --- CORE LOGIC: Handle Incoming & Dispatch Outgoing ---
-async function handleIncomingMessageFlow(senderId, incomingData, injectedProfile = null) {
-    if (!senderId) return null;
+async function handleIncomingMessageFlow(senderId, incomingData) {
+    if (!senderId) return;
 
     // 1. CRM Lookup / Create
     let conversation = conversationsStore.find(c => c.igsid === senderId);
@@ -216,19 +216,13 @@ async function handleIncomingMessageFlow(senderId, incomingData, injectedProfile
         let profileAvatar = `https://ui-avatars.com/api/?name=User+${senderId.slice(-4)}&background=random`;
         let igUsername = null;
 
-        // Use injected profile if provided (Simulator), otherwise fetch real profile
-        if (injectedProfile) {
-            if (injectedProfile.name) profileName = injectedProfile.name;
-            if (injectedProfile.profile_pic) profileAvatar = injectedProfile.profile_pic;
-            if (injectedProfile.username) igUsername = injectedProfile.username;
-        } else {
-            const profileData = await fetchInstagramProfile(senderId);
-            if (profileData) {
-                if (profileData.name) profileName = profileData.name;
-                else if (profileData.username) profileName = profileData.username;
-                if (profileData.profile_pic) profileAvatar = profileData.profile_pic;
-                igUsername = profileData.username;
-            }
+        // Fetch Real Profile
+        const profileData = await fetchInstagramProfile(senderId);
+        if (profileData) {
+            if (profileData.name) profileName = profileData.name;
+            else if (profileData.username) profileName = profileData.username;
+            if (profileData.profile_pic) profileAvatar = profileData.profile_pic;
+            igUsername = profileData.username;
         }
 
         conversation = {
@@ -250,12 +244,6 @@ async function handleIncomingMessageFlow(senderId, incomingData, injectedProfile
         conversationsStore = conversationsStore.filter(c => c.id !== conversation.id);
         conversationsStore.unshift(conversation);
         conversation.unreadCount += 1;
-        
-        // Update profile in CRM if simulation provides new data
-        if (injectedProfile) {
-            if (injectedProfile.name) conversation.customerName = injectedProfile.name;
-            if (injectedProfile.profile_pic) conversation.avatarUrl = injectedProfile.profile_pic;
-        }
     }
 
     // 2. Parse Incoming Content
@@ -281,13 +269,12 @@ async function handleIncomingMessageFlow(senderId, incomingData, injectedProfile
     });
 
     // 3. AI Processing (Text Only)
-    let aiText = null;
     if (!conversation.isAiPaused) {
         // Send Typing Indicator
         await callInstagramApi(constructSenderAction(senderId, 'typing_on'));
 
         // Generate AI Response
-        aiText = await generateAiResponse(conversation.messages, PRODUCT_CATALOG);
+        const aiText = await generateAiResponse(conversation.messages, PRODUCT_CATALOG);
 
         // Send Text Response
         await callInstagramApi(constructTextMessage(senderId, aiText));
@@ -301,8 +288,6 @@ async function handleIncomingMessageFlow(senderId, incomingData, injectedProfile
         });
         conversation.lastMessage = aiText;
     }
-
-    return aiText;
 }
 
 // --- WEBHOOK HANDLER ---
@@ -405,53 +390,49 @@ app.post('/api/conversations/:id/pause', (req, res) => {
 // --- DEVELOPER SIMULATION ENDPOINT ---
 app.post('/api/dev/simulate', async (req, res) => {
     try {
-        const { payload, profileResponse, graphVersion, accessToken } = req.body;
-        
-        let parsedPayload, parsedProfile;
-        try { parsedPayload = JSON.parse(payload); } catch(e) { throw new Error("Invalid Payload JSON"); }
-        try { parsedProfile = JSON.parse(profileResponse); } catch(e) { throw new Error("Invalid Profile JSON"); }
+        const body = req.body;
+        // Basic extraction for simulation - expects standard Meta/Instagram format
+        let senderId = null;
+        let messageText = null;
 
-        const entry = parsedPayload.entry?.[0];
+        // Extract specifics based on the table requirements
+        const entry = body.entry?.[0];
         const messaging = entry?.messaging?.[0];
-        
-        if (!messaging?.sender?.id || !messaging?.message?.text) {
-             throw new Error("Invalid Webhook Structure. Sender ID or Message Text missing.");
+
+        if (messaging) {
+            senderId = messaging.sender?.id;
+            messageText = messaging.message?.text;
         }
-        
-        const senderId = messaging.sender.id;
 
-        // EXECUTE REAL LOGIC WITH INJECTED PROFILE
-        // This updates conversationsStore in-memory, so CRM page will see it.
-        const aiResponseText = await handleIncomingMessageFlow(senderId, messaging, parsedProfile);
+        if (!senderId || !messageText) {
+             return res.status(400).json({ error: "Invalid Webhook Format. Could not find sender.id or message.text" });
+        }
 
-        // Construct Response for UI Visualization
-        const responseData = {
-            parsedFields: {
-                object: parsedPayload.object || 'instagram',
-                entryId: entry?.id || 'UNKNOWN',
-                entryTime: entry?.time || Date.now(),
-                senderId: senderId,
-                recipientId: messaging.recipient?.id,
-                messageId: messaging.message.mid,
-                messageText: messaging.message.text
-            },
-            profileRequest: {
-                url: `https://graph.facebook.com/${graphVersion || 'v21.0'}/${senderId}?fields=name,profile_pic&access_token=${accessToken || 'ACCESS_TOKEN'}`,
-                method: "GET",
-                mockResponse: parsedProfile
-            },
-            aiContext: {
-                userName: parsedProfile.name,
-                userMessage: messaging.message.text
-            },
-            aiResponse: aiResponseText || "AI Paused or No Response",
-            graphApiPayload: {
-                recipient: { id: senderId },
-                message: { text: aiResponseText || "..." }
-            }
+        // Detailed Parsing for Developer UI
+        const parsedFields = {
+            object: body.object,
+            entryId: entry?.id,
+            entryTime: entry?.time,
+            senderId: messaging?.sender?.id,
+            recipientId: messaging?.recipient?.id,
+            messageId: messaging?.message?.mid,
+            messageText: messaging?.message?.text
         };
 
-        res.json(responseData);
+        // Construct a single turn history for simulation
+        // const history = [{ role: 'user', content: messageText, type: 'text', timestamp: Date.now() }];
+        
+        // BYPASS AI CALL: Return static response as requested for developer testing
+        const aiText = "AI Response";
+        
+        // Construct the output payload that would be sent to Graph API
+        const graphPayload = constructTextMessage(senderId, aiText);
+
+        res.json({
+            parsedFields, // Return the detailed breakout
+            aiResponse: aiText,
+            graphApiPayload: graphPayload
+        });
 
     } catch (e) {
         console.error("Simulation Error", e);
@@ -464,8 +445,8 @@ app.get('/webhook/instagram', handleWebhookVerification);
 app.post('/webhook/instagram', handleWebhookEvent);
 
 // Removed WhatsApp Routes
-app.get('/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM Server is Running', environment: process.env.K_SERVICE ? 'Cloud Run' : 'Local/Other', region: process.env.K_REVISION || 'N/A' }));
-app.get('/api/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM Server is Running', environment: process.env.K_SERVICE ? 'Cloud Run' : 'Local/Other', region: process.env.K_REVISION || 'N/A' }));
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM Server is Running' }));
+app.get('/api/health', (req, res) => res.status(200).json({ status: 'ok', message: 'Hewdes CRM Server is Running' }));
 app.get('/api/logs', (req, res) => res.json(systemLogs));
 
 app.get('/', (req, res) => {

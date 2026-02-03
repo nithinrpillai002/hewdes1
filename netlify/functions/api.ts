@@ -31,7 +31,7 @@ const addSystemLog = (method: string, url: string, status: number, outcome: stri
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'hewdes_rttf0kd11o1axrmc';
 const HARDCODED_KIE_KEY = '3a748f6c1558e84cf2ca54b22c393832';
 const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || ''; 
-const GRAPH_VERSION = "v21.0";
+const GRAPH_VERSION = "v24.0";
 
 // --- Real Meta API Call (Text Only) ---
 async function sendToInstagram(recipientId: string, text: string) {
