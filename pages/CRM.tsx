@@ -23,6 +23,7 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
   const [inputText, setInputText] = useState('');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const prevConversationsLength = useRef(0);
 
   // Settings State
   const [activeSettingsTab, setActiveSettingsTab] = useState<'instagram' | 'whatsapp'>('instagram');
@@ -42,6 +43,16 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
               if (res.ok) {
                   const data = await res.json();
                   setConversations(data);
+                  
+                  // Auto-select new chat logic
+                  if (data.length > prevConversationsLength.current) {
+                      // Assuming new chats are unshifted to the top (server behavior)
+                      const newestChat = data[0];
+                      if (newestChat && prevConversationsLength.current > 0) {
+                          setSelectedChatId(newestChat.id);
+                      }
+                  }
+                  prevConversationsLength.current = data.length;
               }
           } catch (e) {
               console.error("Polling error:", e);
@@ -49,7 +60,7 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
       };
 
       fetchConversations(); // Initial load
-      const interval = setInterval(fetchConversations, 3000); // Poll every 3s
+      const interval = setInterval(fetchConversations, 2000); // Poll every 2s for faster updates
       return () => clearInterval(interval);
   }, []);
 
@@ -166,7 +177,23 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
           return <span className="italic text-slate-500">{msg.content}</span>;
       }
 
-      // 4. Standard Text - PDF 4.1
+      // 4. Quick Replies - PDF 5.2 (Mixed with Text)
+      if (msg.type === 'quick_reply' || (msg.quick_replies && msg.quick_replies.length > 0)) {
+          return (
+              <div>
+                  <div className="mb-2">{msg.content}</div>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                      {msg.quick_replies?.map((qr, idx) => (
+                          <span key={idx} className="px-3 py-1 bg-white/20 dark:bg-black/20 border border-white/30 rounded-full text-xs font-medium cursor-default">
+                              {qr.title}
+                          </span>
+                      ))}
+                  </div>
+              </div>
+          );
+      }
+
+      // 5. Standard Text - PDF 4.1
       return <span>{msg.content}</span>;
   };
 
@@ -209,7 +236,7 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
                   <Inbox size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
                   <h3 className="text-slate-800 dark:text-white font-semibold mb-1">No Messages Yet</h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-                      Simulate a webhook to start.
+                      Simulate a webhook in Settings to start.
                   </p>
               </div>
           ) : (

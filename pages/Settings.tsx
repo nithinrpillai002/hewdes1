@@ -1,4 +1,5 @@
 
+
 import React, { useEffect, useState } from 'react';
 import { ShieldCheck, Moon, Sun, Activity, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Server, PlayCircle, Wifi, WifiOff, Cloud, Key, Database, Lock, Save, Eye, EyeOff } from 'lucide-react';
 import { SystemLog, PlatformCredentials } from '../types';
@@ -34,10 +35,22 @@ const Settings: React.FC<SettingsProps> = ({ darkMode, setDarkMode }) => {
     alert('AI API Key Saved!');
   };
 
-  const handleSaveCreds = () => {
+  const handleSaveCreds = async () => {
     localStorage.setItem('ig_creds', JSON.stringify(igCreds));
     localStorage.setItem('wa_creds', JSON.stringify(waCreds));
-    alert('Platform Credentials Saved locally!');
+    
+    // Attempt to sync to server (since server cannot read localstorage)
+    try {
+        await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ igToken: igCreds.token, waToken: waCreds.token })
+        });
+        alert('Platform Credentials Saved and Synced to Server!');
+    } catch (e) {
+        console.error("Failed to sync config to server", e);
+        alert('Credentials saved locally, but failed to sync to server (Server might be offline).');
+    }
   };
 
   const checkServerStatus = async () => {

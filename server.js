@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
+import { GoogleGenAI, Type } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,13 +26,19 @@ const BANNER = `
 const app = express();
 const PORT = process.env.PORT || 8080;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'hewdes_rttf0kd11o1axrmc';
-const HARDCODED_KIE_KEY = '3a748f6c1558e84cf2ca54b22c393832';
+
+// Initialize Google GenAI
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || 'dummy_key_for_build' });
 
 // --- IN-MEMORY DATABASE ---
-// In a real app, use PostgreSQL/MongoDB as per PDF Section 6.2
 let conversationsStore = []; 
 let systemLogs = [];
 const MAX_LOGS = 50;
+
+// --- DYNAMIC CONFIGURATION (In-Memory) ---
+// These allow the Settings page to update server behavior without restart
+let IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || '';
+let WA_ACCESS_TOKEN = process.env.WA_ACCESS_TOKEN || '';
 
 // --- PRODUCT CATALOG (Mock Database) ---
 const PRODUCT_CATALOG = [
@@ -77,144 +84,225 @@ const addSystemLog = (method, url, status, outcome, source, payload) => {
   if (status >= 400) console.error(`[LOG-ERROR] ${outcome}`);
 };
 
-// --- HELPER: KIE / Gemini API Call ---
-async function callKieGemini(messages, apiKey) {
-    const KIE_ENDPOINT = "https://api.kie.ai/gemini-3-flash/v1/chat/completions";
+// --- INSTAGRAM API HELPER (PDF Requirement) ---
+async function fetchInstagramProfile(igsid) {
+    if (!IG_ACCESS_TOKEN) {
+        console.log(`[IG-API] No Access Token set. Skipping profile fetch for ${igsid}.`);
+        return null;
+    }
     
-    // We strictly use tools or JSON mode to structure responses
-    const body = {
-        messages: messages,
-        stream: false,
-        response_format: { type: "json_object" } // Force JSON for predictable product recommendations
-    };
-
-    console.log(`[KIE-REQ] Sending to ${KIE_ENDPOINT}`);
-
+    const url = `https://graph.instagram.com/v20.0/${igsid}?fields=name,username,profile_pic&access_token=${IG_ACCESS_TOKEN}`;
+    
     try {
-        const response = await fetch(KIE_ENDPOINT, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-                'Accept': 'application/json',
-                'User-Agent': 'Hewdes-CRM-Server/1.0'
-            },
-            body: JSON.stringify(body)
-        });
-
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`KIE API responded with ${response.status}: ${errText}`);
-        }
+        console.log(`[IG-API] Fetching profile: ${url}`);
+        const response = await fetch(url);
         
-        return await response.json();
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[IG-API] Failed to fetch profile: ${errorText}`);
+            addSystemLog('GET', url, response.status, 'IG Profile Fetch Failed', 'instagram', { error: errorText });
+            return null;
+        }
 
-    } catch (error) {
-        console.error(`[KIE-ERROR] Connection Failed:`, error);
-        throw error;
+        const data = await response.json();
+        addSystemLog('GET', url, 200, 'IG Profile Fetched', 'instagram', data);
+        return data; // Returns { name, username, profile_pic, id }
+    } catch (e) {
+        console.error(`[IG-API] Exception: ${e.message}`);
+        return null;
     }
 }
 
-// --- SENDING MESSAGES (PDF Section 5) ---
-// This function constructs payloads exactly as Instagram Graph API expects them.
-const sendInstagramMessage = async (recipientId, content) => {
-    // content can be a string (text) or an object (template/attachment)
-    
-    let payload = {
-        recipient: { id: recipientId },
-        message: {}
-    };
+// --- INSTAGRAM PAYLOAD CONSTRUCTORS (Strictly per PDF Pages 15-18) ---
 
-    if (typeof content === 'string') {
-        // PDF 5.1 Send Text Message
-        payload.message = { text: content };
-    } else if (content.type === 'template') {
-        // PDF 5.4 Send Generic Template
-        payload.message = {
+// PDF 5.1: Send Text Message
+const constructTextMessage = (recipientId, text) => {
+    return {
+        recipient: { id: recipientId },
+        message: { text: text }
+    };
+};
+
+// PDF 5.2: Send Message with Quick Replies
+const constructQuickReplyMessage = (recipientId, text, quickReplies) => {
+    return {
+        recipient: { id: recipientId },
+        message: {
+            text: text,
+            quick_replies: quickReplies.map(qr => ({
+                content_type: 'text',
+                title: qr.title.substring(0, 20), // PDF Constraint: Title max 20 chars
+                payload: qr.payload
+            }))
+        }
+    };
+};
+
+// PDF 5.4: Send Generic Template (Product Card)
+const constructGenericTemplate = (recipientId, elements) => {
+    return {
+        recipient: { id: recipientId },
+        message: {
             attachment: {
                 type: 'template',
                 payload: {
                     template_type: 'generic',
-                    elements: content.elements
+                    elements: elements.slice(0, 10) // PDF Constraint: Max 10 elements
                 }
             }
-        };
-    } else if (content.quick_replies) {
-        // PDF 5.2 Send with Quick Replies
-        payload.message = {
-            text: content.text,
-            quick_replies: content.quick_replies
-        };
-    }
-
-    // In a real app, we would POST to https://graph.facebook.com/v18.0/me/messages
-    // Here we log it as an "Outgoing" event and store it in our in-memory DB for the UI
-    addSystemLog('POST', `https://graph.facebook.com/v18.0/me/messages`, 200, 'Message Sent (Simulated)', 'instagram', payload);
-    
-    return payload; // Return so we can save to conversation store
+        }
+    };
 };
 
-// --- CORE LOGIC: Handle Incoming & AI Response ---
+// PDF 5.5: React to Message (Sender Action)
+const constructSenderAction = (recipientId, action) => {
+    return {
+        recipient: { id: recipientId },
+        sender_action: action // e.g., 'typing_on', 'mark_seen'
+    };
+};
+
+// --- AI LOGIC using @google/genai ---
+async function generateAiResponse(conversationHistory, productCatalog) {
+    try {
+        const productContext = productCatalog.map(p => 
+            `ID: ${p.id}, Name: ${p.name}, Price: ₹${p.price}, URL: ${p.imageUrl}`
+        ).join('\n');
+
+        const systemInstruction = `
+            You are "Hewdes Bot", the AI assistant for Hewdes Gifts.
+            
+            YOUR GOAL: Help customers find gifts or answer questions.
+            
+            PRODUCT CATALOG:
+            ${productContext}
+            
+            OUTPUT RULES:
+            You must output a strictly valid JSON object adhering to this schema.
+            Do NOT output markdown. Do NOT output plain text.
+            
+            Schema:
+            {
+                "intent": "TEXT_REPLY" | "SHOW_PRODUCTS" | "ASK_WITH_OPTIONS",
+                "text": "The text message content",
+                "productIds": ["id1", "id2"], // Only if intent is SHOW_PRODUCTS
+                "options": [{"title": "Yes", "payload": "YES"}, {"title": "No", "payload": "NO"}] // Only if intent is ASK_WITH_OPTIONS
+            }
+        `;
+
+        const historyForModel = conversationHistory.slice(-5).map(m => {
+            const role = m.role === 'model' ? 'model' : 'user';
+            const text = m.type === 'template' ? "Sent product cards" : (m.content || "");
+            return { role, parts: [{ text }] };
+        });
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: historyForModel.length > 0 ? historyForModel : [{ role: 'user', parts: [{ text: 'Hello' }] }],
+            config: {
+                systemInstruction: systemInstruction,
+                responseMimeType: "application/json",
+                // Using responseSchema to enforce strict structure
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        intent: { type: Type.STRING, enum: ["TEXT_REPLY", "SHOW_PRODUCTS", "ASK_WITH_OPTIONS"] },
+                        text: { type: Type.STRING },
+                        productIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        options: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    title: { type: Type.STRING },
+                                    payload: { type: Type.STRING }
+                                },
+                                required: ["title", "payload"]
+                            }
+                        }
+                    },
+                    required: ["intent", "text"]
+                }
+            }
+        });
+
+        if (response.text) {
+            return JSON.parse(response.text);
+        }
+        return { intent: "TEXT_REPLY", text: "I apologize, I'm having trouble connecting right now." };
+
+    } catch (e) {
+        console.error("AI Generation Error:", e);
+        return { intent: "TEXT_REPLY", text: "System is busy. Please try again later." };
+    }
+}
+
+// --- CORE LOGIC: Handle Incoming & Dispatch Outgoing ---
 async function handleIncomingMessageFlow(platform, senderId, incomingData) {
     if (!senderId) return;
 
     // 1. CRM Lookup / Create (Section 6.2)
     let conversation = conversationsStore.find(c => c.igsid === senderId);
     
+    // "on receiving a message, it should open a new chat"
+    // Fetch profile data ONLY if it's a new chat to save API calls, or if we want to refresh.
     if (!conversation) {
+        let profileName = `User ${senderId.slice(-4)}`;
+        let profileAvatar = `https://ui-avatars.com/api/?name=User+${senderId.slice(-4)}&background=random`;
+        let igUsername = null;
+
+        // --- INSTAGRAM PROFILE FETCH LOGIC ---
+        if (platform === 'instagram') {
+            const profileData = await fetchInstagramProfile(senderId);
+            if (profileData) {
+                if (profileData.name) profileName = profileData.name;
+                else if (profileData.username) profileName = profileData.username;
+                
+                if (profileData.profile_pic) profileAvatar = profileData.profile_pic;
+                igUsername = profileData.username;
+            }
+        }
+
         conversation = {
             id: Date.now().toString(),
             igsid: senderId,
-            customerName: `User ${senderId.slice(-4)}`,
+            customerName: profileName,
             platform: platform,
             lastMessage: "",
             lastMessageTime: Date.now(),
             unreadCount: 0,
-            tags: [{ id: 'new', label: 'New Lead', color: 'bg-blue-100 text-blue-700' }],
+            tags: [
+                { id: 'new', label: 'New Lead', color: 'bg-blue-100 text-blue-700' },
+                ...(platform === 'instagram' ? [{ id: 'ig', label: 'Instagram', color: 'bg-pink-100 text-pink-700' }] : [])
+            ],
             isAiPaused: false,
             status: 'active',
-            avatarUrl: `https://ui-avatars.com/api/?name=User+${senderId.slice(-4)}&background=random`,
+            avatarUrl: profileAvatar,
             messages: []
         };
         conversationsStore.unshift(conversation);
     } else {
-        // Reset unread count if we are about to respond? No, increment for agent.
+        // Move to top to indicate recent activity
+        conversationsStore = conversationsStore.filter(c => c.id !== conversation.id);
+        conversationsStore.unshift(conversation);
         conversation.unreadCount += 1;
     }
 
     // 2. Process Specific Event Types (PDF Section 3 & 4)
     let userMessageContent = "";
     let messageType = 'text';
-    let attachments = [];
 
     if (incomingData.message?.text) {
-        // Standard Text (4.1)
         userMessageContent = incomingData.message.text;
     } 
     else if (incomingData.message?.attachments) {
-        // Attachments (4.2)
-        messageType = 'image'; // Simplifying for now
+        messageType = 'image';
         userMessageContent = "Sent an attachment";
-        attachments = incomingData.message.attachments.map(att => ({
-            type: att.type,
-            payload: att.payload
-        }));
     }
     else if (incomingData.postback) {
-        // Postback (4.5)
-        userMessageContent = `[Clicked Button]: ${incomingData.postback.title}`;
-    }
-    else if (incomingData.reaction) {
-        // Reaction (4.4)
-        const react = incomingData.reaction;
-        if (react.action === 'react') {
-            // Find message and add reaction (Simplified: just logging as a message for now)
-            userMessageContent = `Reacted ${react.emoji}`;
-            messageType = 'reaction';
-        }
+        userMessageContent = incomingData.postback.title || incomingData.postback.payload;
     }
 
-    // Update Conversation State
     conversation.lastMessage = userMessageContent;
     conversation.lastMessageTime = Date.now();
     
@@ -223,103 +311,73 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
         role: 'user',
         content: userMessageContent,
         timestamp: Date.now(),
-        type: messageType,
-        attachments: attachments
+        type: messageType
     });
 
-    // 3. AI Logic (PDF 6.3 & 7.4)
-    if (!conversation.isAiPaused && messageType === 'text') {
-        try {
-            console.log(`[AI] Generating response for ${senderId}...`);
-            
-            // Context Awareness
-            const productList = PRODUCT_CATALOG.map(p => `${p.id}: ${p.name} (₹${p.price})`).join('\n');
-            
-            const systemMessage = {
-                role: "developer",
-                content: [{ type: "text", text: `You are the AI assistant for Hewdes Gifts. 
-                Your Goal: Sell gifts and answer questions.
-                
-                AVAILABLE PRODUCTS:
-                ${productList}
+    // 3. AI Processing (Strict Output Formatting)
+    if (!conversation.isAiPaused) {
+        // Send Typing Indicator (PDF 5.6)
+        const typingPayload = constructSenderAction(senderId, 'typing_on');
+        addSystemLog('POST', 'https://graph.facebook.com/v18.0/me/messages', 200, 'Typing Indicator', platform, typingPayload);
 
-                INSTRUCTIONS:
-                1. If the user asks for products, return a JSON object with "type": "recommendation" and "productIds": ["id1", "id2"].
-                2. If the user asks a general question, return JSON with "type": "text" and "message": "your response".
-                3. Be concise and friendly.` }]
-            };
-            
-            const userHistory = conversation.messages.slice(-5).map(m => ({
-                role: m.role === 'model' ? 'assistant' : 'user',
-                content: [{ type: "text", text: m.content || "[Non-text message]" }]
-            }));
+        // Call Gemini
+        const aiDecision = await generateAiResponse(conversation.messages, PRODUCT_CATALOG);
+        let finalPayload = {};
+        let storedMessage = {
+            id: (Date.now() + 1).toString(),
+            role: 'model',
+            timestamp: Date.now(),
+            content: aiDecision.text,
+            type: 'text'
+        };
 
-            const payload = [systemMessage, ...userHistory];
-            const kieResponse = await callKieGemini(payload, HARDCODED_KIE_KEY);
-            
-            // Parse JSON Response
-            let aiResponseRaw = kieResponse.choices?.[0]?.message?.content;
-            let aiAction = { type: 'text', message: "I'm having trouble connecting right now." };
-            
-            try {
-                if (typeof aiResponseRaw === 'string') {
-                    // Clean up markdown code blocks if present
-                    aiResponseRaw = aiResponseRaw.replace(/```json/g, '').replace(/```/g, '');
-                    aiAction = JSON.parse(aiResponseRaw);
-                }
-            } catch (e) {
-                console.error("Failed to parse AI JSON:", e);
-                aiAction = { type: 'text', message: aiResponseRaw }; // Fallback to raw text
-            }
+        // Construct Payload based on Intent (PDF Specs)
+        if (aiDecision.intent === 'SHOW_PRODUCTS' && aiDecision.productIds) {
+            const elements = aiDecision.productIds.map(pid => {
+                const prod = PRODUCT_CATALOG.find(p => p.id === pid);
+                if (!prod) return null;
+                return {
+                    title: prod.name,
+                    subtitle: `₹${prod.price}`,
+                    image_url: prod.imageUrl,
+                    buttons: [
+                        { type: "postback", title: "View", payload: `VIEW_${prod.id}` },
+                        { type: "postback", title: "Buy", payload: `ADD_${prod.id}` }
+                    ]
+                };
+            }).filter(Boolean);
 
-            // Execute Response Strategy based on Type
-            if (aiAction.type === 'recommendation' && aiAction.productIds) {
-                // Construct Generic Template (PDF 5.4)
-                const elements = aiAction.productIds.map(pid => {
-                    const prod = PRODUCT_CATALOG.find(p => p.id === pid);
-                    if (!prod) return null;
-                    return {
-                        title: prod.name,
-                        subtitle: `₹${prod.price}`,
-                        image_url: prod.imageUrl,
-                        buttons: [
-                            { type: "postback", title: "View Details", payload: `VIEW_${prod.id}` },
-                            { type: "postback", title: "Add to Cart", payload: `ADD_${prod.id}` }
-                        ]
-                    };
-                }).filter(Boolean);
-
-                if (elements.length > 0) {
-                    await sendInstagramMessage(senderId, { type: 'template', elements });
-                    
-                    // Store in DB
-                    conversation.messages.push({
-                        id: (Date.now() + 1).toString(),
-                        role: 'model',
-                        content: "Here are some recommendations:",
-                        timestamp: Date.now(),
-                        type: 'template',
-                        attachments: [{ type: 'template', payload: { template_type: 'generic', elements } }]
-                    });
-                }
+            if (elements.length > 0) {
+                finalPayload = constructGenericTemplate(senderId, elements);
+                storedMessage.type = 'template';
+                storedMessage.attachments = [{
+                    type: 'template',
+                    payload: { template_type: 'generic', elements }
+                }];
             } else {
-                // Standard Text
-                const responseText = aiAction.message || "How can I help?";
-                await sendInstagramMessage(senderId, responseText);
-                
-                conversation.messages.push({
-                    id: (Date.now() + 1).toString(),
-                    role: 'model',
-                    content: responseText,
-                    timestamp: Date.now(),
-                    type: 'text'
-                });
-                conversation.lastMessage = responseText;
+                // Fallback to text if products not found
+                finalPayload = constructTextMessage(senderId, aiDecision.text);
             }
-
-        } catch (e) {
-            console.error("AI Auto-Reply Error:", e);
+        } 
+        else if (aiDecision.intent === 'ASK_WITH_OPTIONS' && aiDecision.options) {
+            finalPayload = constructQuickReplyMessage(senderId, aiDecision.text, aiDecision.options);
+            storedMessage.type = 'quick_reply';
+            storedMessage.quick_replies = aiDecision.options.map(o => ({
+                content_type: 'text',
+                title: o.title,
+                payload: o.payload
+            }));
+        } 
+        else {
+            // Default TEXT_REPLY
+            finalPayload = constructTextMessage(senderId, aiDecision.text);
         }
+
+        // "Send" (Log and Store)
+        addSystemLog('POST', 'https://graph.facebook.com/v18.0/me/messages', 200, 'Message Sent', platform, finalPayload);
+        
+        conversation.messages.push(storedMessage);
+        conversation.lastMessage = storedMessage.content || "Sent an attachment";
     }
 }
 
@@ -328,13 +386,10 @@ const handleWebhookEvent = async (req, res, platform) => {
   const body = req.body;
   addSystemLog('POST', req.url, 200, 'Webhook Received', platform, body);
 
-  // 1. Parse Standard Meta Payload (PDF 4.1)
-  // Structure: object -> entry[] -> messaging[] OR changes[]
+  // Parse Standard Meta Payload (PDF 4.1)
   if (body.object === 'instagram' || body.object === 'page') {
       if (Array.isArray(body.entry)) {
           for (const entry of body.entry) {
-              
-              // Handle Messaging Events (Messages, Postbacks, Reactions)
               if (Array.isArray(entry.messaging)) {
                   for (const event of entry.messaging) {
                       const senderId = event.sender?.id;
@@ -343,22 +398,12 @@ const handleWebhookEvent = async (req, res, platform) => {
                       }
                   }
               }
-              
-              // Handle Changes (Comments, Mentions - PDF 4.8, 4.9)
-              if (Array.isArray(entry.changes)) {
-                  for (const change of entry.changes) {
-                      // Logic for comments would go here
-                      // value: { field: 'comments', value: { ... } }
-                      console.log("Change event detected:", change.field);
-                  }
-              }
           }
       }
   }
-  // 2. Handle User-Provided "Direct" Format (Legacy/Debug support from prompt)
+  // Support for legacy/simulated simple format
   else if (body.field === 'messages' && body.value) {
       const senderId = body.value.sender?.id;
-      // Map to standard event structure for unified processing
       const simulatedEvent = {
           sender: body.value.sender,
           message: body.value.message,
@@ -387,12 +432,21 @@ const handleWebhookVerification = (req, res, platform) => {
 
 // --- API ROUTES ---
 
-// Polling for Frontend
 app.get('/api/conversations', (req, res) => {
     res.json(conversationsStore);
 });
 
-// Manual Message from Agent
+// Endpoint to update tokens from Settings UI
+app.post('/api/config', (req, res) => {
+    const { igToken, waToken } = req.body;
+    if (igToken !== undefined) {
+        IG_ACCESS_TOKEN = igToken;
+        console.log(`[CONFIG] IG Token updated via API.`);
+    }
+    if (waToken !== undefined) WA_ACCESS_TOKEN = waToken;
+    res.json({ success: true, message: 'Configuration updated in memory.' });
+});
+
 app.post('/api/conversations/:id/message', (req, res) => {
     const { text, role } = req.body;
     const conv = conversationsStore.find(c => c.id === req.params.id);
@@ -407,7 +461,6 @@ app.post('/api/conversations/:id/message', (req, res) => {
         });
         conv.lastMessage = text;
         conv.lastMessageTime = Date.now();
-        // PDF Section 6.4: Human Handoff - Pause AI if agent intervenes
         conv.isAiPaused = true; 
         res.json({ success: true });
     } else {
@@ -426,7 +479,6 @@ app.post('/api/conversations/:id/pause', (req, res) => {
     }
 });
 
-// Existing Route Mappings
 app.get('/webhook/instagram', (req, res) => handleWebhookVerification(req, res, 'instagram'));
 app.post('/webhook/instagram', (req, res) => handleWebhookEvent(req, res, 'instagram'));
 app.get('/webhook/whatsapp', (req, res) => handleWebhookVerification(req, res, 'whatsapp'));

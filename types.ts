@@ -29,6 +29,12 @@ export interface MessageAttachment {
   };
 }
 
+export interface QuickReply {
+  content_type: 'text';
+  title: string;
+  payload: string;
+}
+
 export interface MessageReaction {
   reaction: string; // e.g., 'love'
   emoji: string;
@@ -41,8 +47,9 @@ export interface Message {
   content?: string; // Optional if it's purely an attachment
   timestamp: number;
   isHumanOverride?: boolean;
-  type: 'text' | 'image' | 'template' | 'reaction';
+  type: 'text' | 'image' | 'template' | 'reaction' | 'quick_reply';
   attachments?: MessageAttachment[];
+  quick_replies?: QuickReply[];
   reaction?: MessageReaction;
 }
 
