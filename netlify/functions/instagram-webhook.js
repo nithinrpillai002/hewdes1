@@ -10,9 +10,19 @@ exports.handler = async (event, context) => {
     return { statusCode: 200, headers, body: '' };
   }
 
-  // GET - Webhook Verification
+  // GET - Webhook Verification & Health Check
   if (event.httpMethod === 'GET') {
-    const params = event.queryStringParameters;
+    const params = event.queryStringParameters || {};
+    
+    // Health Check / Ping
+    if (params.mode === 'ping') {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ status: 'active', message: 'Server is live' })
+      };
+    }
+
     const mode = params['hub.mode'];
     const token = params['hub.verify_token'];
     const challenge = params['hub.challenge'];

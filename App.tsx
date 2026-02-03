@@ -24,6 +24,7 @@ const App: React.FC = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [serverStatus, setServerStatus] = useState<'checking' | 'connected' | 'error'>('checking');
 
   // --- Logging Helper ---
   const addLog = useCallback((message: string, type: LogType = 'info', data?: any) => {
@@ -52,7 +53,27 @@ const App: React.FC = () => {
       setConfig(JSON.parse(savedConfig));
     }
     
-    addLog('System initialized', 'info');
+    addLog('Client initialized', 'info');
+
+    // Check Server Health
+    const checkServer = async () => {
+      try {
+        addLog('Connecting to server...', 'info');
+        const res = await fetch('/.netlify/functions/instagram-webhook?mode=ping');
+        if (res.ok) {
+          const data = await res.json();
+          setServerStatus('connected');
+          addLog('Server initialized: Netlify Functions active', 'info', data);
+        } else {
+          setServerStatus('error');
+          addLog(`Server check failed: Status ${res.status}`, 'error');
+        }
+      } catch (e: any) {
+        setServerStatus('error');
+        addLog(`Server check failed: ${e.message}`, 'error');
+      }
+    };
+    checkServer();
 
     // Setup global simulator
     window.simulateWebhook = (customPayload) => {
@@ -279,6 +300,26 @@ const App: React.FC = () => {
 
   const activeConversation = conversations.find(c => c.id === activeConversationId) || null;
 
+  // Determine status indicator color
+  // Green: Server Connected AND Token Configured
+  // Orange: Server Connected BUT No Token
+  // Red: Server Error or Checking
+  let statusColor = 'bg-crm-error';
+  let statusTitle = 'Server Disconnected';
+
+  if (serverStatus === 'connected') {
+    if (config.bearerToken) {
+      statusColor = 'bg-crm-success';
+      statusTitle = 'System Online & Authenticated';
+    } else {
+      statusColor = 'bg-orange-500';
+      statusTitle = 'Server Online - Token Missing';
+    }
+  } else if (serverStatus === 'checking') {
+    statusColor = 'bg-gray-400';
+    statusTitle = 'Connecting...';
+  }
+
   return (
     <div className="flex h-screen bg-crm-background text-crm-text overflow-hidden font-sans">
       {/* Sidebar */}
@@ -288,7 +329,7 @@ const App: React.FC = () => {
             <MessageSquare className="text-crm-primary" />
             <h1 className="font-bold text-lg">Instagram CRM</h1>
           </div>
-          <div className={`w-3 h-3 rounded-full ${config.bearerToken ? 'bg-crm-success' : 'bg-crm-error'}`} title={config.bearerToken ? "Connected" : "No Token"} />
+          <div className={`w-3 h-3 rounded-full ${statusColor} transition-colors duration-500`} title={statusTitle} />
         </div>
         
         <ChatList 
