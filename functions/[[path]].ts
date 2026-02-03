@@ -223,8 +223,15 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
 export const onRequest = async (context: any) => {
     const { request, env } = context;
     const url = new URL(request.url);
-    const path = url.pathname;
     
+    // Normalize path: Remove trailing slash to ensure consistency (e.g., /webhook/instagram/ -> /webhook/instagram)
+    const path = url.pathname.replace(/\/$/, '');
+    
+    // Debug Log: Allows checking if the request even reached the worker
+    if (path.includes('webhook')) {
+        console.log(`[DEBUG] Incoming Request to: ${path} | Method: ${request.method}`);
+    }
+
     // Initialize Runtime Config from Env if empty
     if (!RUNTIME_IG_TOKEN && env.IG_ACCESS_TOKEN) {
         RUNTIME_IG_TOKEN = env.IG_ACCESS_TOKEN;
@@ -305,7 +312,7 @@ export const onRequest = async (context: any) => {
                 return new Response(challenge, { status: 200 });
             }
             addSystemLog('GET', path, 403, 'Verification Failed', 'instagram', Object.fromEntries(url.searchParams));
-            return new Response('OK', { status: 200 });
+            return new Response('Forbidden', { status: 403 });
         }
 
         // EVENT RECEIPT
@@ -334,7 +341,8 @@ export const onRequest = async (context: any) => {
             } catch (e: any) {
                 console.error(`[WEBHOOK] Error processing:`, e);
                 addSystemLog('POST', path, 500, 'Webhook Error', 'instagram', { error: e.message });
-                return new Response('Error', { status: 500 });
+                // Return 200 even on error to stop Facebook from retrying and disabling the webhook
+                return new Response('Error handled', { status: 200 });
             }
         }
     }
