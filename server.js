@@ -1,8 +1,12 @@
 
-const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const esbuild = require('esbuild');
+import express from 'express';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import esbuild from 'esbuild';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // --- VISUAL STARTUP BANNER ---
 const BANNER = `
@@ -38,8 +42,6 @@ app.use((req, res, next) => {
     console.log('╚════════════════════════════════════════════════════════════╝');
   } else if (isApi) {
     console.log(`[API] ${req.method} ${req.originalUrl}`);
-  } else if (!isAsset) {
-    console.log(`[ACCESS] ${req.method} ${req.originalUrl}`);
   }
   next();
 });
@@ -66,7 +68,6 @@ const addSystemLog = (method, url, status, outcome, source, payload) => {
   systemLogs.unshift(logEntry);
   if (systemLogs.length > MAX_LOGS) systemLogs.pop();
   
-  // Console feedback
   if (status >= 400) {
     console.error(`[LOG-ERROR] ${outcome}`);
   } else {
@@ -74,7 +75,7 @@ const addSystemLog = (method, url, status, outcome, source, payload) => {
   }
 };
 
-// --- CHAT HELPERS (LOCAL IMPLEMENTATION) ---
+// --- CHAT HELPERS ---
 const checkDeliveryAPI = async (pincode) => {
   await new Promise(resolve => setTimeout(resolve, 800));
   const validPincode = /^[1-9][0-9]{5}$/.test(pincode);
@@ -126,6 +127,11 @@ async function callKieGemini(messages, apiKey) {
         }
     ];
 
+    const body = { messages: messages, tools: tools, stream: false };
+    
+    console.log(`[KIE-REQ] POST ${KIE_ENDPOINT}`);
+    console.log(`[KIE-KEY] ${apiKey ? apiKey.substring(0, 5) + '...' : 'NONE'}`);
+
     try {
         const response = await fetch(KIE_ENDPOINT, {
             method: 'POST',
@@ -133,16 +139,24 @@ async function callKieGemini(messages, apiKey) {
                 'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ messages: messages, tools: tools, stream: false })
+            body: JSON.stringify(body)
         });
 
         if (!response.ok) {
-            const err = await response.text();
-            console.error("KIE API Error:", err);
-            throw new Error(`KIE API Error: ${response.status} ${err}`);
+            const errText = await response.text();
+            console.error(`[KIE-ERR] Status: ${response.status}`);
+            console.error(`[KIE-ERR] Body: ${errText}`);
+            throw new Error(`KIE API Error: ${response.status} ${errText}`);
         }
-        return await response.json();
-    } catch (error) { throw error; }
+        
+        const json = await response.json();
+        console.log(`[KIE-RES] Success`);
+        return json;
+
+    } catch (error) {
+        console.error(`[KIE-FAIL] Network or Parse Error:`, error);
+        throw error;
+    }
 }
 
 // --- API ROUTES ---
@@ -158,7 +172,6 @@ app.get('/api/logs', (req, res) => {
   res.json(systemLogs);
 });
 
-// CHAT ROUTE (Now implemented locally)
 app.post('/api/chat', async (req, res) => {
   try {
     const { history, currentMessage, products, rules, platform, apiKey } = req.body;
@@ -223,11 +236,11 @@ app.post('/api/chat', async (req, res) => {
     res.json({ text: textResponse, actionTaken: finalAction });
   } catch (e) {
     console.error("Error in Backend:", e);
-    res.status(500).json({ text: "Sorry, I'm having trouble connecting to the AI brain right now.", actionTaken: "API Error" });
+    const msg = e.message || "Unknown error";
+    res.status(500).json({ text: `System Error: ${msg}`, actionTaken: "API Error" });
   }
 });
 
-// Webhook Routes
 const handleWebhookVerification = (req, res, platform) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -250,12 +263,11 @@ app.post('/webhook/instagram', (req, res) => handleWebhookEvent(req, res, 'insta
 app.get('/webhook/whatsapp', (req, res) => handleWebhookVerification(req, res, 'whatsapp'));
 app.post('/webhook/whatsapp', (req, res) => handleWebhookEvent(req, res, 'whatsapp'));
 
-// --- EXPLICIT ROOT HANDLING ---
 app.get('/', (req, res) => {
   res.sendFile(path.resolve(__dirname, 'index.html'));
 });
 
-// --- FRONTEND SERVING (Transpilation) ---
+// --- FRONTEND SERVING ---
 app.use(async (req, res, next) => {
   if (req.method !== 'GET') return next();
   let relativePath = req.path;

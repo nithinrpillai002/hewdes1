@@ -1,3 +1,4 @@
+
 import express, { Router } from 'express';
 import serverless from 'serverless-http';
 
@@ -57,7 +58,6 @@ const checkDeliveryAPI = async (pincode: string): Promise<string> => {
 
 // --- KIE API Integration ---
 async function callKieGemini(messages: any[], apiKey: string) {
-    // UPDATED: Using Gemini 3 Flash endpoint
     const KIE_ENDPOINT = "https://api.kie.ai/gemini-3-flash/v1/chat/completions";
     
     // Define Tools according to KIE Docs
@@ -96,6 +96,8 @@ async function callKieGemini(messages: any[], apiKey: string) {
         }
     ];
 
+    console.log(`[Netlify] Calling KIE: ${KIE_ENDPOINT}`);
+    
     try {
         const response = await fetch(KIE_ENDPOINT, {
             method: 'POST',
@@ -112,12 +114,13 @@ async function callKieGemini(messages: any[], apiKey: string) {
 
         if (!response.ok) {
             const err = await response.text();
-            console.error("KIE API Error:", err);
+            console.error(`[Netlify] KIE Error ${response.status}:`, err);
             throw new Error(`KIE API Error: ${response.status} ${err}`);
         }
 
         return await response.json();
     } catch (error) {
+        console.error("[Netlify] Fetch Failed:", error);
         throw error;
     }
 }
@@ -234,7 +237,7 @@ router.post('/chat', async (req, res) => {
   } catch (e: any) {
     console.error("Error in Backend:", e);
     const msg = e.message || "Unknown error";
-    res.status(500).json({ text: "Sorry, I'm having trouble connecting to the AI brain right now.", actionTaken: "API Error" });
+    res.status(500).json({ text: `System Error: ${msg}`, actionTaken: "API Error" });
   }
 });
 
