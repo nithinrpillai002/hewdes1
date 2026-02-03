@@ -59,11 +59,19 @@ const App: React.FC = () => {
     const checkServer = async () => {
       try {
         addLog('Connecting to server...', 'info');
-        const res = await fetch('/.netlify/functions/instagram-webhook?mode=ping');
+        // Cloudflare endpoint
+        const res = await fetch('/api/webhook?mode=ping');
+        
+        // Handle non-JSON responses (like 404 HTML pages)
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error('Endpoint returned non-JSON response. Check server deployment.');
+        }
+
         if (res.ok) {
           const data = await res.json();
           setServerStatus('connected');
-          addLog('Server initialized: Netlify Functions active', 'info', data);
+          addLog('Server initialized: Cloudflare Functions active', 'info', data);
         } else {
           setServerStatus('error');
           addLog(`Server check failed: Status ${res.status}`, 'error');
@@ -123,7 +131,7 @@ const App: React.FC = () => {
       };
     }
 
-    const apiUrl = `/.netlify/functions/instagram-api`;
+    const apiUrl = `/api/instagram`;
     
     addLog('Fetching user profile', 'outgoing', { 
       senderId, 
@@ -266,7 +274,7 @@ const App: React.FC = () => {
     }
 
     // 2. API Call
-    const apiUrl = `/.netlify/functions/instagram-api`;
+    const apiUrl = `/api/instagram`;
     const payload = {
       action: 'sendMessage',
       accessToken: config.bearerToken,
@@ -301,9 +309,6 @@ const App: React.FC = () => {
   const activeConversation = conversations.find(c => c.id === activeConversationId) || null;
 
   // Determine status indicator color
-  // Green: Server Connected AND Token Configured
-  // Orange: Server Connected BUT No Token
-  // Red: Server Error or Checking
   let statusColor = 'bg-crm-error';
   let statusTitle = 'Server Disconnected';
 

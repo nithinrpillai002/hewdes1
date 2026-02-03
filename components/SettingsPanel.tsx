@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save } from 'lucide-react';
+import { Save, Info } from 'lucide-react';
 import { CrmConfig } from '../types';
 
 interface SettingsPanelProps {
@@ -13,7 +13,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onSave }) => {
 
   useEffect(() => {
     setLocalConfig(config);
-    setWebhookUrl(window.location.origin + '/.netlify/functions/instagram-webhook');
+    setWebhookUrl(window.location.origin + '/api/webhook');
   }, [config]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -62,6 +62,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onSave }) => {
             className="w-full bg-crm-background border border-crm-border rounded px-2 py-1 text-sm text-crm-text focus:outline-none focus:border-crm-primary"
             placeholder="Verify Token"
           />
+          <div className="mt-1 flex items-start gap-1 text-[10px] text-crm-textSecondary">
+            <Info size={10} className="mt-0.5 flex-shrink-0" />
+            <span>Must match <strong>WEBHOOK_VERIFY_TOKEN</strong> in Cloudflare settings. Default: <code>instagram_crm_verify_token</code></span>
+          </div>
         </div>
         <div>
           <label className="block text-xs font-medium text-crm-textSecondary mb-1">Webhook URL (Read-only)</label>

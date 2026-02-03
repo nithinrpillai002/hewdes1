@@ -28,21 +28,26 @@ exports.handler = async (event, context) => {
     const challenge = params['hub.challenge'];
 
     // Get verify token from environment variable
-    const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'your_verify_token_here';
+    // Default matches the frontend default 'instagram_crm_verify_token' for easy setup
+    const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'instagram_crm_verify_token';
 
-    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-      console.log('Webhook verified');
-      return {
-        statusCode: 200,
-        headers,
-        body: challenge
-      };
-    } else {
-      return {
-        statusCode: 403,
-        headers,
-        body: 'Forbidden'
-      };
+    if (mode === 'subscribe') {
+      if (token === VERIFY_TOKEN) {
+        console.log(`Webhook verified successfully. Token: ${token}`);
+        return {
+          statusCode: 200,
+          headers,
+          body: challenge
+        };
+      } else {
+        console.error(`Webhook verification failed. Received: "${token}", Expected: "${VERIFY_TOKEN}"`);
+        console.error(`Tip: Set WEBHOOK_VERIFY_TOKEN in Netlify Environment Variables to match your Facebook configuration, or use "${VERIFY_TOKEN}" in Facebook.`);
+        return {
+          statusCode: 403,
+          headers,
+          body: 'Forbidden'
+        };
+      }
     }
   }
 

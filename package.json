@@ -1,14 +1,13 @@
 {
   "name": "instagram-crm",
   "version": "1.0.0",
-  "description": "Instagram CRM for Netlify",
+  "description": "Instagram CRM for Cloudflare Pages",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "node-fetch": "^2.6.7",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "lucide-react": "^0.344.0"
