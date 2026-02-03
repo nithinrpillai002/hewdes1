@@ -2,7 +2,6 @@ export interface Product {
   id: string;
   name: string;
   price: number;
-  costPrice?: number; // Internal cost for profit calculation
   description: string;
   leadTime: string; // e.g., "2-3 business days"
   imageUrl: string;

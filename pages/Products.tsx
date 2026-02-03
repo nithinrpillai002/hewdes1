@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Product } from '../types';
-import { Plus, Search, Package, Clock, DollarSign, Image as ImageIcon, Trash2, Tag } from 'lucide-react';
+import { Plus, Search, Package, Clock, DollarSign, Image as ImageIcon, Trash2 } from 'lucide-react';
 
 interface ProductsProps {
   products: Product[];
@@ -12,7 +12,6 @@ const Products: React.FC<ProductsProps> = ({ products, setProducts }) => {
   const [newProduct, setNewProduct] = useState<Partial<Product>>({
     name: '',
     price: 0,
-    costPrice: 0,
     description: '',
     leadTime: '1-2 Days',
     inStock: true,
@@ -27,7 +26,6 @@ const Products: React.FC<ProductsProps> = ({ products, setProducts }) => {
       id: Date.now().toString(),
       name: newProduct.name,
       price: Number(newProduct.price),
-      costPrice: Number(newProduct.costPrice) || 0,
       description: newProduct.description || '',
       leadTime: newProduct.leadTime || '1-2 Days',
       imageUrl: newProduct.imageUrl || `https://picsum.photos/400/400?random=${Date.now()}`,
@@ -37,7 +35,7 @@ const Products: React.FC<ProductsProps> = ({ products, setProducts }) => {
 
     setProducts(prev => [...prev, product]);
     setShowAddForm(false);
-    setNewProduct({ name: '', price: 0, costPrice: 0, description: '', leadTime: '1-2 Days', inStock: true, category: 'Gifts' });
+    setNewProduct({ name: '', price: 0, description: '', leadTime: '1-2 Days', inStock: true, category: 'Gifts' });
   };
 
   const handleDelete = (id: string) => {
@@ -81,20 +79,7 @@ const Products: React.FC<ProductsProps> = ({ products, setProducts }) => {
                   />
                 </div>
                 <div>
-                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Category</label>
-                   <input 
-                    type="text" 
-                    value={newProduct.category}
-                    onChange={e => setNewProduct({...newProduct, category: e.target.value})}
-                    className="w-full px-4 py-2 border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="e.g. Gifts"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Selling Price (₹)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Price ($)</label>
                   <div className="relative">
                     <DollarSign size={16} className="absolute left-3 top-3 text-slate-400" />
                     <input 
@@ -102,19 +87,6 @@ const Products: React.FC<ProductsProps> = ({ products, setProducts }) => {
                       type="number" 
                       value={newProduct.price}
                       onChange={e => setNewProduct({...newProduct, price: parseFloat(e.target.value)})}
-                      className="w-full pl-9 pr-4 py-2 border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                      placeholder="0.00"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Cost Price (₹) <span className="text-xs font-normal text-slate-400">(Internal)</span></label>
-                  <div className="relative">
-                    <Tag size={16} className="absolute left-3 top-3 text-slate-400" />
-                    <input 
-                      type="number" 
-                      value={newProduct.costPrice}
-                      onChange={e => setNewProduct({...newProduct, costPrice: parseFloat(e.target.value)})}
                       className="w-full pl-9 pr-4 py-2 border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
                       placeholder="0.00"
                     />
@@ -183,13 +155,8 @@ const Products: React.FC<ProductsProps> = ({ products, setProducts }) => {
               <div className="h-48 overflow-hidden relative group">
                 <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                 <div className="absolute top-3 right-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm px-2 py-1 rounded-md text-xs font-bold shadow-sm text-slate-800 dark:text-white">
-                  ₹{product.price.toLocaleString('en-IN')}
+                  ${product.price.toFixed(2)}
                 </div>
-                {product.costPrice && (
-                    <div className="absolute top-3 left-3 bg-slate-900/50 backdrop-blur-sm px-2 py-1 rounded-md text-[10px] font-medium text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                        Cost: ₹{product.costPrice.toLocaleString('en-IN')}
-                    </div>
-                )}
               </div>
               <div className="p-5 flex-1 flex flex-col">
                 <div className="flex justify-between items-start mb-2">

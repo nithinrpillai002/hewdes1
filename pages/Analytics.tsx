@@ -16,7 +16,7 @@ const Analytics: React.FC = () => {
             <span className="text-green-600 dark:text-green-400 text-sm font-bold">+12.5%</span>
           </div>
           <h3 className="text-slate-500 dark:text-slate-400 text-sm font-medium">Total Profit</h3>
-          <p className="text-2xl font-bold text-slate-900 dark:text-white">₹14,250.00</p>
+          <p className="text-2xl font-bold text-slate-900 dark:text-white">$14,250.00</p>
         </div>
         
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm">
@@ -26,8 +26,8 @@ const Analytics: React.FC = () => {
             </div>
             <span className="text-slate-400 dark:text-slate-500 text-sm font-medium">Last 30 Days</span>
           </div>
-          <h3 className="text-slate-500 dark:text-slate-400 text-sm font-medium">Ad Spend (FB + GST)</h3>
-          <p className="text-2xl font-bold text-slate-900 dark:text-white">₹3,420.50</p>
+          <h3 className="text-slate-500 dark:text-slate-400 text-sm font-medium">Ad Spend (FB)</h3>
+          <p className="text-2xl font-bold text-slate-900 dark:text-white">$3,420.50</p>
         </div>
 
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm">
@@ -37,7 +37,7 @@ const Analytics: React.FC = () => {
             </div>
             <span className="text-blue-600 dark:text-blue-400 text-sm font-bold">+5.2%</span>
           </div>
-          <h3 className="text-slate-500 dark:text-slate-400 text-sm font-medium">Total Product Sales</h3>
+          <h3 className="text-slate-500 dark:text-slate-400 text-sm font-medium">Product Sales</h3>
           <p className="text-2xl font-bold text-slate-900 dark:text-white">842 Units</p>
         </div>
       </div>
