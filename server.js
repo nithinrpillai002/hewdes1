@@ -43,8 +43,9 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// INCREASED LIMIT FOR GITHUB PUSH PAYLOADS
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // --- IN-MEMORY LOGGING SYSTEM ---
 let systemLogs = [];
@@ -117,6 +118,99 @@ app.get('/api/logs', (req, res) => {
   } catch (error) {
     console.error('Error serializing logs:', error);
     res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// --- GITHUB INTEGRATION ENDPOINT ---
+app.post('/api/github/push', async (req, res) => {
+  const { token, owner, repo, message } = req.body;
+
+  if (!token || !owner || !repo) {
+    return res.status(400).json({ error: 'Missing GitHub credentials' });
+  }
+
+  // Files to Sync
+  const filesToSync = [
+    'server.js',
+    'package.json',
+    'index.html',
+    'index.tsx',
+    'types.ts',
+    'metadata.json',
+    'App.tsx',
+    'components/Sidebar.tsx',
+    'pages/Analytics.tsx',
+    'pages/Products.tsx',
+    'pages/CRM.tsx',
+    'pages/Settings.tsx',
+    'services/geminiService.ts'
+  ];
+
+  try {
+    let pushedCount = 0;
+    
+    // Check if repo exists and we have access
+    const checkRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+        headers: { Authorization: `Bearer ${token}`, "User-Agent": "Hewdes-CRM" }
+    });
+    
+    if (!checkRes.ok) {
+        throw new Error(`Cannot access repository ${owner}/${repo}. Check token permissions.`);
+    }
+
+    for (const filePath of filesToSync) {
+        const fullPath = path.join(__dirname, filePath);
+        
+        if (fs.existsSync(fullPath)) {
+            // Read file content
+            const content = fs.readFileSync(fullPath).toString('base64');
+            
+            // 1. Get current SHA (if exists)
+            let sha = null;
+            try {
+                const getRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`, {
+                    headers: { Authorization: `Bearer ${token}`, "User-Agent": "Hewdes-CRM" }
+                });
+                if (getRes.ok) {
+                    const json = await getRes.json();
+                    sha = json.sha;
+                }
+            } catch (e) {
+                // Ignore errors here, file might not exist yet
+            }
+
+            // 2. Upload File (Create or Update)
+            const body = {
+                message: message || "Update from Hewdes CRM",
+                content: content,
+                branch: "main" // Assuming main branch
+            };
+            if (sha) body.sha = sha;
+
+            const putRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`, {
+                method: 'PUT',
+                headers: { 
+                    Authorization: `Bearer ${token}`, 
+                    "User-Agent": "Hewdes-CRM",
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (!putRes.ok) {
+                const err = await putRes.json();
+                console.error(`Failed to push ${filePath}:`, err);
+            } else {
+                pushedCount++;
+            }
+        }
+    }
+
+    res.json({ success: true, count: pushedCount });
+
+  } catch (error) {
+    console.error('GitHub Push Error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
