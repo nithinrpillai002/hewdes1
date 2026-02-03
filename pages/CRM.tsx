@@ -1,7 +1,13 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { Product, AiRule, Message } from '../types';
+import { Product, AiRule, Message, Conversation, Tag } from '../types';
 import { generateAIResponse } from '../services/geminiService';
-import { Instagram, MessageCircle, Bot, Save, Plus, Trash, Send, Loader2, ChevronDown, ChevronRight, Globe, Copy, CheckCircle2, AlertTriangle, Smartphone, Pencil, Lock, Server, HelpCircle, ExternalLink, RefreshCw, BookOpen } from 'lucide-react';
+import { 
+  Instagram, MessageCircle, Bot, Save, Plus, Trash, Send, Loader2, 
+  Search, MoreVertical, Phone, MapPin, Tag as TagIcon, Zap, ZapOff,
+  Settings as SettingsIcon, X, CheckCircle2, Lock, AlertTriangle, 
+  Paperclip, Smile, Filter, Copy, Globe, Server, Inbox, UserPlus
+} from 'lucide-react';
 
 interface CRMProps {
   products: Product[];
@@ -10,53 +16,31 @@ interface CRMProps {
 }
 
 const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
-  // Main Platform Tab
-  const [activePlatform, setActivePlatform] = useState<'instagram' | 'whatsapp'>('instagram');
-  
-  // Section Toggles inside platform
-  const [openSection, setOpenSection] = useState<{connection: boolean; training: boolean}>({
-    connection: true,
-    training: true
-  });
-  const [showGuide, setShowGuide] = useState(true);
-
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', role: 'model', content: 'Namaste! Welcome to Hewdes Gifts. How can I assist you today?', timestamp: Date.now() }
-  ]);
-  const [inputMessage, setInputMessage] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  // --- STATE ---
+  // Start with empty conversations as requested (No dummy data)
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<'all' | 'instagram' | 'whatsapp'>('all');
+  const [inputText, setInputText] = useState('');
+  const [isTyping, setIsTyping] = useState(false); // AI Typing indicator
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Settings State
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'instagram' | 'whatsapp'>('instagram');
+  const [waConfig, setWaConfig] = useState(() => JSON.parse(localStorage.getItem('wa_config') || '{"id":"","token":""}'));
+  const [igConfig, setIgConfig] = useState(() => JSON.parse(localStorage.getItem('ig_config') || '{"id":"","token":""}'));
   const [newRule, setNewRule] = useState('');
 
-  // Settings for connection - Loaded from LocalStorage
-  const [waConfig, setWaConfig] = useState(() => {
-    const saved = localStorage.getItem('wa_config');
-    return saved ? JSON.parse(saved) : { id: '', token: '' };
-  });
+  // Derived State
+  const activeChat = conversations.find(c => c.id === selectedChatId);
+  const filteredConversations = conversations.filter(c => filter === 'all' || c.platform === filter);
 
-  const [igConfig, setIgConfig] = useState(() => {
-    const saved = localStorage.getItem('ig_config');
-    return saved ? JSON.parse(saved) : { id: '', token: '' };
-  });
-
-  // Webhook Configuration State
-  const [currentOrigin, setCurrentOrigin] = useState('');
-  // HARDCODED TOKEN TO MATCH SERVER.JS
-  const verifyToken = 'hewdes_rttf0kd11o1axrmc'; 
-
+  // --- EFFECTS ---
   useEffect(() => {
-    // Detect environment
-    if (typeof window !== 'undefined') {
-        setCurrentOrigin(window.location.origin);
-    }
-  }, []);
+    scrollToBottom();
+  }, [activeChat?.messages, isTyping]);
 
-  // Locking state (UI only) - initialize locked if data exists
-  const [isWaLocked, setIsWaLocked] = useState(() => !!(waConfig.id && waConfig.token));
-  const [isIgLocked, setIsIgLocked] = useState(() => !!(igConfig.id && igConfig.token));
-
-  // Save Configs to LocalStorage
   useEffect(() => {
     localStorage.setItem('wa_config', JSON.stringify(waConfig));
   }, [waConfig]);
@@ -64,117 +48,156 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
   useEffect(() => {
     localStorage.setItem('ig_config', JSON.stringify(igConfig));
   }, [igConfig]);
-  
-  // Verification States
-  const [isVerifyingWa, setIsVerifyingWa] = useState(false);
-  const [waConnectionStatus, setWaConnectionStatus] = useState<{ success: boolean; message: string } | null>(null);
 
-  const toggleSection = (section: 'connection' | 'training') => {
-    setOpenSection(prev => ({ ...prev, [section]: !prev[section] }));
-  };
-
+  // --- HANDLERS ---
   const scrollToBottom = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, isTyping, actionStatus]);
+  const simulateIncomingMessage = () => {
+    const names = ["Aarav Patel", "Diya Sharma", "Vihaan Singh", "Ananya Gupta", "Rohan Mehta", "Ishita Reddy"];
+    const msgs = [
+        "Hey, do you have this in blue?", 
+        "Where is my order #123?", 
+        "Love the product! Can I order another?", 
+        "Hi, I have a question about shipping.",
+        "Is this item customizable?",
+        "Do you ship to Bangalore?"
+    ];
+    const platforms: ('instagram' | 'whatsapp')[] = ['instagram', 'whatsapp'];
+    
+    const randomName = names[Math.floor(Math.random() * names.length)];
+    const randomMsg = msgs[Math.floor(Math.random() * msgs.length)];
+    const randomPlatform = platforms[Math.floor(Math.random() * platforms.length)];
+    
+    const newId = Date.now().toString();
+    const newConv: Conversation = {
+      id: newId,
+      customerName: randomName,
+      platform: randomPlatform,
+      lastMessage: randomMsg,
+      lastMessageTime: Date.now(),
+      unreadCount: 1,
+      tags: [{ id: `t-${newId}`, label: 'New Inquiry', color: 'bg-blue-100 text-blue-700' }],
+      isAiPaused: false,
+      avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(randomName)}&background=random&color=fff`,
+      messages: [
+        { id: `m-${Date.now()}`, role: 'user', content: randomMsg, timestamp: Date.now() }
+      ]
+    };
+    
+    setConversations(prev => [newConv, ...prev]);
+    if (!selectedChatId) setSelectedChatId(newId);
+  };
 
-  // Reset chat when switching platforms
-  useEffect(() => {
-    setMessages([{ id: '1', role: 'model', content: 'Namaste! Welcome to Hewdes Gifts. How can I assist you today?', timestamp: Date.now() }]);
-  }, [activePlatform]);
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!inputText.trim() || !activeChat) return;
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputMessage.trim() || isTyping) return;
+    const currentChatId = activeChat.id;
+    const userMessageContent = inputText;
 
-    // Use key from settings or empty string (server will use fallback)
-    const apiKey = localStorage.getItem('kie_api_key') || '';
-
-    const userMsg: Message = {
+    // 1. Add User/Agent Message
+    const newMessage: Message = {
       id: Date.now().toString(),
-      role: 'user',
-      content: inputMessage,
-      timestamp: Date.now()
+      role: 'user', // We mark agent messages as user role for the AI context, but flag them visually
+      content: userMessageContent,
+      timestamp: Date.now(),
+      isHumanOverride: true // Mark as sent by human agent from CRM
     };
 
-    setMessages(prev => [...prev, userMsg]);
-    setInputMessage('');
-    setIsTyping(true);
-    setActionStatus(null);
+    updateConversation(currentChatId, {
+      lastMessage: userMessageContent,
+      lastMessageTime: Date.now(),
+      messages: [...activeChat.messages, newMessage]
+    });
 
-    // Filter rules for the active platform
-    const platformRules = rules.filter(r => r.platform === activePlatform);
-    const platformLabel = activePlatform === 'instagram' ? 'Instagram' : 'WhatsApp';
+    setInputText('');
 
-    const response = await generateAIResponse(
-      messages, 
-      userMsg.content, 
-      products, 
-      platformRules, 
-      platformLabel,
-      apiKey
-    );
+    // 2. If AI is NOT paused, generate response
+    if (!activeChat.isAiPaused) {
+      setIsTyping(true);
+      
+      const apiKey = localStorage.getItem('kie_api_key') || '';
+      const platformRules = rules.filter(r => r.platform === activeChat.platform);
+      const platformLabel = activeChat.platform === 'instagram' ? 'Instagram' : 'WhatsApp';
 
-    if (response.actionTaken) {
-        setActionStatus(response.actionTaken);
-    }
+      // Simulate network delay for realism
+      setTimeout(async () => {
+        try {
+          // Construct history for AI (exclude system prompts if needed, handled in service)
+          const history = activeChat.messages.concat(newMessage);
+          
+          const aiResponse = await generateAIResponse(
+            history,
+            'Generate a response based on the previous message context', // Trigger generation
+            products,
+            platformRules,
+            platformLabel,
+            apiKey
+          );
 
-    const botMsg: Message = {
-      id: (Date.now() + 1).toString(),
-      role: 'model',
-      content: response.text,
-      timestamp: Date.now()
-    };
+          const botMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            role: 'model',
+            content: aiResponse.text,
+            timestamp: Date.now()
+          };
 
-    setMessages(prev => [...prev, botMsg]);
-    setIsTyping(false);
-  };
+          // Update conversation with bot response only if the chat hasn't been paused in the meantime
+          setConversations(prev => prev.map(c => {
+            if (c.id === currentChatId && !c.isAiPaused) {
+               return {
+                 ...c,
+                 lastMessage: aiResponse.text,
+                 lastMessageTime: Date.now(),
+                 messages: [...c.messages, newMessage, botMessage]
+               };
+            }
+            return c;
+          }));
 
-  const handleSaveInstagram = () => {
-    if (igConfig.id && igConfig.token) {
-        setIsIgLocked(true);
-    }
-  };
-
-  const handleVerifyWhatsApp = async () => {
-    if (!waConfig.id || !waConfig.token) {
-        setWaConnectionStatus({ success: false, message: "Please enter both Phone Number ID and Access Token." });
-        return;
-    }
-    
-    setIsVerifyingWa(true);
-    setWaConnectionStatus(null);
-    
-    try {
-        // Attempt to fetch phone number details from Graph API
-        const response = await fetch(`https://graph.facebook.com/v21.0/${waConfig.id}?fields=id,display_phone_number,quality_rating`, {
-            headers: { 'Authorization': `Bearer ${waConfig.token}` }
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            setWaConnectionStatus({ 
-                success: true, 
-                message: `Verified! Connected to +${data.display_phone_number || '91 XXXXX XXXXX'}` 
-            });
-            setIsWaLocked(true); // Lock on success
-        } else {
-            const errorData = await response.json();
-            throw new Error(errorData.error?.message || "Invalid credentials.");
+        } catch (error) {
+          console.error("AI Error", error);
+        } finally {
+          setIsTyping(false);
         }
-    } catch (error: any) {
-        setWaConnectionStatus({ 
-            success: false, 
-            message: `Error: ${error.message}. Try deploying to Cloud Run if testing connection.` 
-        });
-    } finally {
-        setIsVerifyingWa(false);
+      }, 1000); // 1s visual delay
     }
   };
 
+  const updateConversation = (id: string, updates: Partial<Conversation>) => {
+    setConversations(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+  };
+
+  const toggleAiStatus = () => {
+    if (activeChat) {
+      updateConversation(activeChat.id, { isAiPaused: !activeChat.isAiPaused });
+    }
+  };
+
+  const deleteTag = (tagId: string) => {
+    if(activeChat) {
+        updateConversation(activeChat.id, { 
+            tags: activeChat.tags.filter(t => t.id !== tagId) 
+        });
+    }
+  };
+
+  const addTag = () => {
+    if(activeChat) {
+        const newTag: Tag = { id: Date.now().toString(), label: 'Follow Up', color: 'bg-yellow-100 text-yellow-700' };
+        updateConversation(activeChat.id, { tags: [...activeChat.tags, newTag] });
+    }
+  };
+
+  const handleDeleteConversation = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConversations(prev => prev.filter(c => c.id !== id));
+    if (selectedChatId === id) setSelectedChatId(null);
+  };
+
+  // --- SETTINGS HELPERS ---
   const handleAddRule = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRule.trim()) return;
@@ -183,7 +206,7 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
       type: 'instruction',
       content: newRule,
       isActive: true,
-      platform: activePlatform
+      platform: activeSettingsTab
     };
     setRules(prev => [...prev, rule]);
     setNewRule('');
@@ -193,459 +216,463 @@ const CRM: React.FC<CRMProps> = ({ products, rules, setRules }) => {
     setRules(prev => prev.filter(r => r.id !== id));
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-  };
+  // --- RENDERERS ---
 
-  const renderSetupGuide = () => (
-    <div className="bg-white dark:bg-slate-700 p-5 rounded-lg mb-6 border border-indigo-100 dark:border-slate-600 shadow-sm animate-fadeIn">
-        <h4 className="font-bold text-indigo-700 dark:text-indigo-300 mb-4 flex items-center text-sm uppercase tracking-wide">
-            <BookOpen size={16} className="mr-2" />
-            How to Connect {activePlatform === 'instagram' ? 'Instagram' : 'WhatsApp'}
-        </h4>
-        
-        <div className="space-y-4 text-sm text-slate-600 dark:text-slate-300">
-            <div className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-xs">1</span>
-                <div>
-                    <p className="font-semibold text-slate-800 dark:text-white">Go to Meta Developers</p>
-                    <p>Open <a href="https://developers.facebook.com/apps/" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">developers.facebook.com</a> and select your app.</p>
-                </div>
+  const renderSettingsModal = () => (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="bg-white dark:bg-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+        {/* Modal Header */}
+        <div className="flex justify-between items-center p-6 border-b border-gray-100 dark:border-slate-700">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white">Automation Settings</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Configure connection and AI behavior</p>
+          </div>
+          <button onClick={() => setShowSettingsModal(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-white">
+            <X size={24} />
+          </button>
+        </div>
+
+        {/* Modal Tabs */}
+        <div className="flex border-b border-gray-100 dark:border-slate-700">
+          <button 
+            onClick={() => setActiveSettingsTab('instagram')}
+            className={`flex-1 py-3 text-sm font-semibold flex items-center justify-center space-x-2 ${activeSettingsTab === 'instagram' ? 'text-pink-600 border-b-2 border-pink-600 bg-pink-50 dark:bg-pink-900/20' : 'text-slate-500 dark:text-slate-400'}`}
+          >
+            <Instagram size={16} /> <span>Instagram</span>
+          </button>
+          <button 
+            onClick={() => setActiveSettingsTab('whatsapp')}
+            className={`flex-1 py-3 text-sm font-semibold flex items-center justify-center space-x-2 ${activeSettingsTab === 'whatsapp' ? 'text-green-600 border-b-2 border-green-600 bg-green-50 dark:bg-green-900/20' : 'text-slate-500 dark:text-slate-400'}`}
+          >
+            <MessageCircle size={16} /> <span>WhatsApp</span>
+          </button>
+        </div>
+
+        {/* Modal Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            {/* 1. Connection Config */}
+            <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-gray-100 dark:border-slate-700">
+                <h3 className="font-bold text-slate-700 dark:text-slate-200 mb-4 flex items-center">
+                    <Server size={18} className="mr-2 text-indigo-500" /> 
+                    API Connection
+                </h3>
+                {activeSettingsTab === 'instagram' ? (
+                     <div className="space-y-3">
+                        <input 
+                            type="text" 
+                            placeholder="Instagram Account ID"
+                            value={igConfig.id}
+                            onChange={e => setIgConfig({...igConfig, id: e.target.value})}
+                            className="w-full px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-pink-500"
+                        />
+                        <input 
+                            type="password" 
+                            placeholder="Access Token"
+                            value={igConfig.token}
+                            onChange={e => setIgConfig({...igConfig, token: e.target.value})}
+                            className="w-full px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-pink-500"
+                        />
+                         <div className="flex justify-between items-center text-xs text-slate-500 mt-2">
+                             <span>Callback URL: <code className="bg-gray-100 dark:bg-slate-700 px-1 py-0.5 rounded">{window.location.origin}/webhook/instagram</code></span>
+                             <button className="text-indigo-600 hover:underline">Verify</button>
+                         </div>
+                     </div>
+                ) : (
+                    <div className="space-y-3">
+                        <input 
+                            type="text" 
+                            placeholder="Phone Number ID"
+                            value={waConfig.id}
+                            onChange={e => setWaConfig({...waConfig, id: e.target.value})}
+                            className="w-full px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                        <input 
+                            type="password" 
+                            placeholder="Access Token"
+                            value={waConfig.token}
+                            onChange={e => setWaConfig({...waConfig, token: e.target.value})}
+                            className="w-full px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                         <div className="flex justify-between items-center text-xs text-slate-500 mt-2">
+                             <span>Callback URL: <code className="bg-gray-100 dark:bg-slate-700 px-1 py-0.5 rounded">{window.location.origin}/webhook/whatsapp</code></span>
+                             <button className="text-indigo-600 hover:underline">Verify</button>
+                         </div>
+                    </div>
+                )}
             </div>
 
-            <div className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-xs">2</span>
-                <div>
-                    <p className="font-semibold text-slate-800 dark:text-white">Configure Webhook</p>
-                    <p>On the sidebar, find <strong>{activePlatform === 'instagram' ? 'Instagram' : 'WhatsApp'}</strong> → <strong>Configuration</strong>.</p>
-                    <p>Find the "Webhook" section and click <strong>Edit</strong>.</p>
+            {/* 2. Rules Config */}
+            <div>
+                 <h3 className="font-bold text-slate-700 dark:text-slate-200 mb-4 flex items-center">
+                    <Bot size={18} className="mr-2 text-indigo-500" /> 
+                    AI Instructions
+                </h3>
+                <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
+                    {rules.filter(r => r.platform === activeSettingsTab).length === 0 ? (
+                        <p className="text-sm text-slate-400 italic">No rules yet.</p>
+                    ) : (
+                        rules.filter(r => r.platform === activeSettingsTab).map(rule => (
+                            <div key={rule.id} className="flex justify-between items-start bg-slate-50 dark:bg-slate-900/50 p-2 rounded-lg border border-gray-100 dark:border-slate-700">
+                                <span className="text-sm text-slate-700 dark:text-slate-300">{rule.content}</span>
+                                <button onClick={() => deleteRule(rule.id)} className="text-slate-400 hover:text-red-500 ml-2">
+                                    <Trash size={14} />
+                                </button>
+                            </div>
+                        ))
+                    )}
                 </div>
-            </div>
-
-            <div className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-xs">3</span>
-                <div>
-                    <p className="font-semibold text-slate-800 dark:text-white">Enter Callback Details</p>
-                    <p><strong>Callback URL:</strong> Copy the URL from the "Webhook Setup" box below.</p>
-                    <p><strong>Verify Token:</strong> Copy the token <code>{verifyToken}</code> below.</p>
-                </div>
+                <form onSubmit={handleAddRule} className="flex gap-2">
+                    <input 
+                        type="text" 
+                        value={newRule}
+                        onChange={e => setNewRule(e.target.value)}
+                        placeholder="e.g. Always respond with 'Namaste'..."
+                        className="flex-1 px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">
+                        <Plus size={20} />
+                    </button>
+                </form>
             </div>
         </div>
+      </div>
     </div>
   );
 
-  const renderWebhookSection = (platform: 'instagram' | 'whatsapp') => {
-    const isLocalhost = currentOrigin.includes('localhost') || currentOrigin.includes('127.0.0.1');
-    const webhookUrl = `${currentOrigin}/webhook/${platform}`;
-
-    return (
-        <div className="bg-slate-50 dark:bg-slate-800/50 p-5 rounded-xl border border-indigo-100 dark:border-indigo-900/50 shadow-sm relative overflow-hidden mt-4">
-            <div className="absolute top-0 right-0 p-2 opacity-10">
-                <Globe size={100} className="text-indigo-600 dark:text-indigo-400" />
-            </div>
-            <div className="flex items-center justify-between mb-3 relative z-10">
-                <h4 className="font-bold text-slate-700 dark:text-slate-300 text-sm flex items-center">
-                    <Server size={16} className="mr-2 text-indigo-600 dark:text-indigo-400" />
-                    Webhook Setup (Backend)
-                </h4>
-                <button 
-                    onClick={() => setShowGuide(!showGuide)}
-                    className="text-xs flex items-center text-indigo-600 dark:text-indigo-400 hover:underline bg-white dark:bg-slate-800 px-2 py-1 rounded shadow-sm"
-                >
-                    <HelpCircle size={14} className="mr-1" />
-                    {showGuide ? 'Hide Guide' : 'Show Guide'}
-                </button>
-            </div>
-
-            {showGuide && renderSetupGuide()}
-            
-            <div className="relative z-10 space-y-4">
-                {isLocalhost && (
-                    <div className="bg-red-50 dark:bg-red-900/20 p-3 rounded-lg border border-red-100 dark:border-red-800 flex items-start space-x-2">
-                         <AlertTriangle size={16} className="text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-                         <div className="text-xs text-red-800 dark:text-red-300">
-                            <strong>Localhost Detected:</strong> Webhook verification will FAIL on localhost.
-                        </div>
-                    </div>
-                )}
-
-                <div>
-                    <label className="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Callback URL (HTTPS)</label>
-                    <div className="flex">
-                        <input 
-                            type="text" 
-                            readOnly
-                            value={webhookUrl}
-                            className={`flex-1 px-3 py-1.5 bg-white dark:bg-slate-900 border rounded-l-lg text-xs font-mono shadow-sm outline-none focus:ring-1 focus:ring-indigo-500 ${isLocalhost ? 'text-red-500 border-red-200' : 'text-slate-600 dark:text-slate-300 border-gray-300 dark:border-slate-600'}`}
-                        />
-                        <button 
-                            onClick={() => copyToClipboard(webhookUrl)}
-                            className="px-3 py-1 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-l-0 border-gray-300 dark:border-slate-600 rounded-r-lg text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors shadow-sm"
-                            title="Copy URL"
-                        >
-                            <Copy size={14} />
-                        </button>
-                    </div>
-                </div>
-                <div>
-                        <label className="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Verify Token</label>
-                        <div className="flex">
-                        <input 
-                            type="text" 
-                            readOnly
-                            value={verifyToken} 
-                            className="flex-1 px-3 py-1.5 bg-gray-100 dark:bg-slate-800/50 border border-gray-300 dark:border-slate-600 rounded-lg text-xs text-slate-600 dark:text-slate-300 font-mono shadow-sm outline-none font-bold"
-                        />
-                        <button 
-                            onClick={() => copyToClipboard(verifyToken)}
-                            className="ml-2 px-3 py-1 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded-lg text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors shadow-sm"
-                            title="Copy Token"
-                        >
-                            <Copy size={14} />
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-  };
-
   return (
-    <div className="flex h-full bg-slate-50 dark:bg-slate-900 transition-colors duration-200">
-      {/* Left Panel: CRM Modules */}
-      <div className="w-1/2 flex flex-col border-r border-gray-200 dark:border-slate-700">
-        
-        {/* Module Tabs */}
-        <div className="flex border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800">
-          <button 
-            onClick={() => setActivePlatform('instagram')}
-            className={`flex-1 py-4 flex items-center justify-center space-x-2 text-sm font-semibold transition-colors ${
-                activePlatform === 'instagram' 
-                ? 'text-pink-600 border-b-2 border-pink-600 bg-pink-50/50 dark:bg-pink-900/20' 
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-700'
-            }`}
-          >
-            <Instagram size={18} /> <span>Instagram</span>
-          </button>
-          <button 
-            onClick={() => setActivePlatform('whatsapp')}
-            className={`flex-1 py-4 flex items-center justify-center space-x-2 text-sm font-semibold transition-colors ${
-                activePlatform === 'whatsapp' 
-                ? 'text-green-600 border-b-2 border-green-600 bg-green-50/50 dark:bg-green-900/20' 
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-700'
-            }`}
-          >
-            <MessageCircle size={18} /> <span>WhatsApp</span>
-          </button>
-        </div>
-
-        {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-50 dark:bg-slate-900 space-y-4">
-            
-            {/* 1. Connection Module */}
-            <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
-                <button 
-                    onClick={() => toggleSection('connection')}
-                    className="w-full px-5 py-4 flex items-center justify-between bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
-                >
-                    <div className="flex items-center space-x-3">
-                        <div className={`p-2 rounded-lg ${activePlatform === 'instagram' ? 'bg-pink-100 dark:bg-pink-900/30 text-pink-600 dark:text-pink-400' : 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'}`}>
-                            {activePlatform === 'instagram' ? <Instagram size={20} /> : <Smartphone size={20} />}
-                        </div>
-                        <div className="text-left">
-                            <h3 className="font-bold text-slate-800 dark:text-white text-sm">Connection Settings</h3>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">API Credentials & Webhooks</p>
-                        </div>
-                    </div>
-                    {openSection.connection ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
-                </button>
-                
-                {openSection.connection && (
-                    <div className="px-5 pb-5 pt-2 border-t border-gray-100 dark:border-slate-700 animate-fadeIn">
-                        {activePlatform === 'instagram' ? (
-                             <div className="space-y-4">
-                                <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg text-xs text-blue-700 dark:text-blue-300 border border-blue-100 dark:border-blue-800">
-                                    <p><strong>Note:</strong> Instagram Automation requires both an Account ID and an Access Token to manage Direct Messages via the Graph API.</p>
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-                                        Instagram Account ID {isIgLocked && <Lock size={12} className="inline ml-1" />}
-                                    </label>
-                                    <input 
-                                        type="text" 
-                                        value={igConfig.id}
-                                        onChange={e => setIgConfig({...igConfig, id: e.target.value})}
-                                        disabled={isIgLocked}
-                                        className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border rounded-lg text-sm text-slate-900 dark:text-white outline-none transition-all ${isIgLocked ? 'opacity-60 cursor-not-allowed border-gray-200 dark:border-slate-700' : 'border-gray-200 dark:border-slate-600 focus:border-pink-500 focus:ring-1 focus:ring-pink-500'}`}
-                                        placeholder="Enter Account ID"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-                                        Access Token {isIgLocked && <Lock size={12} className="inline ml-1" />}
-                                    </label>
-                                    <input 
-                                        type="password" 
-                                        value={igConfig.token}
-                                        onChange={e => setIgConfig({...igConfig, token: e.target.value})}
-                                        disabled={isIgLocked}
-                                        className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border rounded-lg text-sm text-slate-900 dark:text-white outline-none transition-all ${isIgLocked ? 'opacity-60 cursor-not-allowed border-gray-200 dark:border-slate-700' : 'border-gray-200 dark:border-slate-600 focus:border-pink-500 focus:ring-1 focus:ring-pink-500'}`}
-                                        placeholder="EAA..."
-                                    />
-                                </div>
-
-                                <div className="flex space-x-3">
-                                    {isIgLocked ? (
-                                        <>
-                                            <button 
-                                                disabled
-                                                className="flex-1 py-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg font-bold text-sm flex items-center justify-center cursor-default"
-                                            >
-                                                <CheckCircle2 size={16} className="mr-2" /> Saved
-                                            </button>
-                                            <button 
-                                                onClick={() => setIsIgLocked(false)}
-                                                className="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 rounded-lg transition-colors"
-                                                title="Edit Credentials"
-                                            >
-                                                <Pencil size={16} />
-                                            </button>
-                                        </>
-                                    ) : (
-                                        <button 
-                                            onClick={handleSaveInstagram}
-                                            className="w-full py-2 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-medium text-sm transition-colors flex items-center justify-center"
-                                        >
-                                            <Save size={16} className="mr-2" /> Save & Connect
-                                        </button>
-                                    )}
-                                </div>
-
-                                {renderWebhookSection('instagram')}
-                             </div>
-                        ) : (
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-                                        Phone Number ID {isWaLocked && <Lock size={12} className="inline ml-1" />}
-                                    </label>
-                                    <input 
-                                        type="text" 
-                                        value={waConfig.id}
-                                        onChange={e => setWaConfig({...waConfig, id: e.target.value})}
-                                        disabled={isWaLocked}
-                                        placeholder="e.g. 10000000000"
-                                        className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border rounded-lg text-sm text-slate-900 dark:text-white outline-none transition-all ${isWaLocked ? 'opacity-60 cursor-not-allowed border-gray-200 dark:border-slate-700' : 'border-gray-200 dark:border-slate-600 focus:border-green-500 focus:ring-1 focus:ring-green-500'}`}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-                                        Access Token {isWaLocked && <Lock size={12} className="inline ml-1" />}
-                                    </label>
-                                    <input 
-                                        type="password" 
-                                        value={waConfig.token}
-                                        onChange={e => setWaConfig({...waConfig, token: e.target.value})}
-                                        disabled={isWaLocked}
-                                        placeholder="EAAG..."
-                                        className={`w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border rounded-lg text-sm text-slate-900 dark:text-white outline-none transition-all ${isWaLocked ? 'opacity-60 cursor-not-allowed border-gray-200 dark:border-slate-700' : 'border-gray-200 dark:border-slate-600 focus:border-green-500 focus:ring-1 focus:ring-green-500'}`}
-                                    />
-                                </div>
-                                
-                                {waConnectionStatus && (
-                                    <div className={`p-3 rounded-lg flex items-start space-x-2 text-xs ${waConnectionStatus.success ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'}`}>
-                                        {waConnectionStatus.success ? <CheckCircle2 size={14} className="mt-0.5" /> : <AlertTriangle size={14} className="mt-0.5" />}
-                                        <span>{waConnectionStatus.message}</span>
-                                    </div>
-                                )}
-
-                                <div className="flex space-x-3">
-                                    {isWaLocked ? (
-                                        <>
-                                            <button 
-                                                disabled
-                                                className="flex-1 py-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg font-bold text-sm flex items-center justify-center cursor-default"
-                                            >
-                                                <CheckCircle2 size={16} className="mr-2" /> Saved
-                                            </button>
-                                            <button 
-                                                onClick={() => setIsWaLocked(false)}
-                                                className="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 rounded-lg transition-colors"
-                                                title="Edit Credentials"
-                                            >
-                                                <Pencil size={16} />
-                                            </button>
-                                        </>
-                                    ) : (
-                                        <button 
-                                            onClick={handleVerifyWhatsApp}
-                                            disabled={isVerifyingWa}
-                                            className="w-full py-2 bg-green-600 hover:bg-green-700 disabled:opacity-70 text-white rounded-lg font-medium text-sm transition-colors flex items-center justify-center"
-                                        >
-                                            {isVerifyingWa ? <Loader2 size={16} className="animate-spin mr-2" /> : <Save size={16} className="mr-2" />}
-                                            Test & Save
-                                        </button>
-                                    )}
-                                </div>
-
-                                {renderWebhookSection('whatsapp')}
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div>
-
-            {/* 2. AI Training Module */}
-            <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors">
-                <button 
-                    onClick={() => toggleSection('training')}
-                    className="w-full px-5 py-4 flex items-center justify-between bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
-                >
-                    <div className="flex items-center space-x-3">
-                        <div className="p-2 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400">
-                            <Bot size={20} />
-                        </div>
-                        <div className="text-left">
-                            <h3 className="font-bold text-slate-800 dark:text-white text-sm">AI Behavior & Memory</h3>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Teach the AI what to say (and what NOT to say)</p>
-                        </div>
-                    </div>
-                    {openSection.training ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
-                </button>
-
-                {openSection.training && (
-                    <div className="px-5 pb-5 pt-2 border-t border-gray-100 dark:border-slate-700 animate-fadeIn">
-                        <div className="bg-indigo-50/50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800 rounded-lg p-4 mb-4">
-                            <h5 className="text-xs font-bold text-indigo-800 dark:text-indigo-300 mb-1">How to train the AI:</h5>
-                            <ul className="list-disc list-inside text-xs text-indigo-700 dark:text-indigo-400 space-y-1">
-                                <li>Add specific answers for common questions.</li>
-                                <li>Set restrictions (e.g., "Never promise delivery before 24 hours").</li>
-                                <li>Define the personality (e.g., "Be super excited about gifts!").</li>
-                            </ul>
-                        </div>
-
-                        <div className="space-y-2 mb-4">
-                            {rules.filter(r => r.platform === activePlatform).length === 0 ? (
-                                <p className="text-center text-slate-400 text-xs py-4 italic">No custom rules added for {activePlatform} yet.</p>
-                            ) : (
-                                rules.filter(r => r.platform === activePlatform).map(rule => (
-                                    <div key={rule.id} className="flex items-start justify-between bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 p-3 rounded-lg shadow-sm group hover:border-indigo-100 dark:hover:border-indigo-800 transition-colors">
-                                        <div className="flex-1">
-                                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{rule.type}</span>
-                                            <p className="text-sm text-slate-600 dark:text-slate-300 mt-0.5">{rule.content}</p>
-                                        </div>
-                                        <button onClick={() => deleteRule(rule.id)} className="text-gray-300 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 transition-colors ml-2">
-                                            <Trash size={14} />
-                                        </button>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-
-                        <form onSubmit={handleAddRule} className="flex flex-col space-y-2">
-                             <input 
-                                type="text" 
-                                value={newRule}
-                                onChange={e => setNewRule(e.target.value)}
-                                placeholder={`e.g., If they ask for discounts, say use code HEWDES10`}
-                                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                            />
-                            <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg transition-colors flex items-center justify-center text-sm font-medium">
-                                <Plus size={16} className="mr-1" /> Add Rule to Memory
-                            </button>
-                        </form>
-                    </div>
-                )}
-            </div>
-
-            {/* Simulation Chat */}
-            <div className="flex justify-center p-4">
-                 <p className="text-center text-[10px] text-slate-400">
-                    AI Agent connected via KIE Gemini 3 Flash API.
-                </p>
-            </div>
-
-        </div>
-      </div>
-
-      {/* Right Panel: Simulation Chat */}
-      <div className="w-1/2 flex flex-col bg-slate-100 dark:bg-slate-950 border-l border-gray-200 dark:border-slate-800 relative">
-        <div className="absolute top-0 left-0 right-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md p-4 border-b border-gray-200 dark:border-slate-800 z-10 flex justify-between items-center transition-colors">
-            <div>
-                <h3 className="font-bold text-slate-800 dark:text-white flex items-center">
-                    {activePlatform === 'instagram' ? <Instagram size={16} className="mr-2 text-pink-600" /> : <MessageCircle size={16} className="mr-2 text-green-600" />}
-                    Live Simulator
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Testing context: {activePlatform === 'instagram' ? 'Instagram DM' : 'WhatsApp (+91)'}</p>
-            </div>
-            <div className="flex items-center space-x-2">
+    <div className="flex h-full bg-slate-50 dark:bg-slate-900 overflow-hidden relative">
+      {/* --- COLUMN 1: CONVERSATION LIST --- */}
+      <div className="w-80 border-r border-gray-200 dark:border-slate-700 flex flex-col bg-white dark:bg-slate-800 z-10">
+        <div className="p-4 border-b border-gray-100 dark:border-slate-700">
+          <div className="flex items-center justify-between mb-4">
+             <h2 className="text-xl font-bold text-slate-800 dark:text-white tracking-tight">Messages</h2>
+             <div className="flex space-x-1">
                  <button 
-                    onClick={() => setMessages([{ id: '1', role: 'model', content: 'Namaste! Welcome to Hewdes Gifts. How can I assist you today?', timestamp: Date.now() }])}
-                    className="text-xs bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 px-3 py-1 rounded-full text-slate-600 dark:text-slate-300 transition-colors flex items-center"
-                >
-                    <RefreshCw size={12} className="mr-1" /> Reset
-                </button>
-            </div>
+                    onClick={simulateIncomingMessage}
+                    title="Simulate Incoming Message (Test)"
+                    className="p-2 text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-slate-700 rounded-full transition-colors"
+                 >
+                    <UserPlus size={20} />
+                 </button>
+                 <button 
+                    onClick={() => setShowSettingsModal(true)} 
+                    className="p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
+                 >
+                    <SettingsIcon size={20} />
+                 </button>
+             </div>
+          </div>
+          
+          <div className="relative mb-3">
+            <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
+            <input 
+              type="text" 
+              placeholder="Search customers..." 
+              className="w-full pl-9 pr-4 py-2 bg-slate-100 dark:bg-slate-900 border-none rounded-xl text-sm text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-500/50"
+            />
+          </div>
+
+          <div className="flex space-x-1 bg-slate-100 dark:bg-slate-900 p-1 rounded-lg">
+             <button 
+                onClick={() => setFilter('all')}
+                className={`flex-1 py-1 text-xs font-medium rounded-md transition-all ${filter === 'all' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}
+             >
+                All
+             </button>
+             <button 
+                onClick={() => setFilter('instagram')}
+                className={`flex-1 py-1 text-xs font-medium rounded-md transition-all ${filter === 'instagram' ? 'bg-white dark:bg-slate-700 text-pink-600 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}
+             >
+                Insta
+             </button>
+             <button 
+                onClick={() => setFilter('whatsapp')}
+                className={`flex-1 py-1 text-xs font-medium rounded-md transition-all ${filter === 'whatsapp' ? 'bg-white dark:bg-slate-700 text-green-600 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}
+             >
+                WA
+             </button>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 pt-20 space-y-4">
-            {messages.map((msg) => (
-                <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : (msg.role === 'system' ? 'justify-center' : 'justify-start')}`}>
-                    {msg.role === 'system' ? (
-                        <span className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-400 px-3 py-1 rounded-full border border-amber-100 dark:border-amber-800">{msg.content}</span>
-                    ) : (
-                        <div className={`max-w-[80%] rounded-2xl px-5 py-3.5 shadow-sm text-sm leading-relaxed ${
-                            msg.role === 'user' 
-                            ? (activePlatform === 'instagram' ? 'bg-pink-600 text-white rounded-br-none' : 'bg-green-600 text-white rounded-br-none')
-                            : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-bl-none border border-gray-100 dark:border-slate-700'
-                        }`}>
-                            {msg.content}
+        <div className="flex-1 overflow-y-auto">
+          {filteredConversations.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 px-6 text-center">
+                  <Inbox size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
+                  <h3 className="text-slate-800 dark:text-white font-semibold mb-1">No Messages Yet</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+                      Conversations will appear here when customers contact you.
+                  </p>
+                  <button 
+                    onClick={simulateIncomingMessage}
+                    className="text-xs bg-indigo-50 dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 px-3 py-2 rounded-lg font-medium hover:bg-indigo-100 dark:hover:bg-slate-600 transition-colors"
+                  >
+                      Simulate Incoming Message
+                  </button>
+              </div>
+          ) : (
+              filteredConversations.map(chat => (
+                <div 
+                    key={chat.id}
+                    onClick={() => setSelectedChatId(chat.id)}
+                    className={`group flex items-start p-4 cursor-pointer border-b border-gray-50 dark:border-slate-700/50 hover:bg-gray-50 dark:hover:bg-slate-700/30 transition-colors ${selectedChatId === chat.id ? 'bg-indigo-50/60 dark:bg-slate-700/60 border-l-4 border-l-indigo-600' : 'border-l-4 border-l-transparent'}`}
+                >
+                    <div className="relative mr-3">
+                        <img src={chat.avatarUrl} alt={chat.customerName} className="w-12 h-12 rounded-full object-cover border border-gray-200 dark:border-slate-600" />
+                        <div className="absolute -bottom-1 -right-1 bg-white dark:bg-slate-800 rounded-full p-0.5">
+                            {chat.platform === 'instagram' ? <Instagram size={14} className="text-pink-600" /> : <MessageCircle size={14} className="text-green-600" />}
+                        </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-baseline mb-1">
+                            <h4 className={`text-sm font-semibold truncate ${selectedChatId === chat.id ? 'text-indigo-900 dark:text-white' : 'text-slate-800 dark:text-slate-200'}`}>{chat.customerName}</h4>
+                            <div className="flex items-center space-x-1">
+                                <span className="text-[10px] text-slate-400 whitespace-nowrap">
+                                    {new Date(chat.lastMessageTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                </span>
+                                <button 
+                                    onClick={(e) => handleDeleteConversation(chat.id, e)}
+                                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 text-slate-400 transition-opacity"
+                                >
+                                    <Trash size={12} />
+                                </button>
+                            </div>
+                        </div>
+                        <p className={`text-xs truncate mb-2 ${selectedChatId === chat.id ? 'text-indigo-700/80 dark:text-slate-300' : 'text-slate-500 dark:text-slate-400'}`}>
+                            {chat.messages[chat.messages.length - 1]?.role === 'user' && !chat.messages[chat.messages.length - 1]?.isHumanOverride ? '' : 'You: '}{chat.lastMessage}
+                        </p>
+                        <div className="flex items-center space-x-2">
+                            {chat.tags.map(tag => (
+                                <span key={tag.id} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${tag.color}`}>
+                                    {tag.label}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                    {chat.unreadCount > 0 && (
+                        <div className="ml-2 w-5 h-5 bg-indigo-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold">
+                            {chat.unreadCount}
                         </div>
                     )}
                 </div>
-            ))}
-            
-            {actionStatus && (
-                <div className="flex justify-start">
-                     <div className="bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 text-xs px-3 py-1.5 rounded-full flex items-center animate-pulse">
-                        <Loader2 size={12} className="mr-2 animate-spin" />
-                        System Action: {actionStatus}
-                     </div>
-                </div>
-            )}
-
-            {isTyping && !actionStatus && (
-                 <div className="flex justify-start">
-                    <div className="bg-white dark:bg-slate-800 px-4 py-3 rounded-2xl rounded-bl-none border border-gray-100 dark:border-slate-700 shadow-sm flex space-x-1">
-                        <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-0"></div>
-                        <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-150"></div>
-                        <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-300"></div>
-                    </div>
-                </div>
-            )}
-            <div ref={chatEndRef} />
-        </div>
-
-        <div className="p-4 bg-white dark:bg-slate-800 border-t border-gray-200 dark:border-slate-700 transition-colors">
-            <form onSubmit={handleSendMessage} className="flex space-x-3">
-                <input 
-                    type="text" 
-                    value={inputMessage}
-                    onChange={e => setInputMessage(e.target.value)}
-                    placeholder={`Message as ${activePlatform === 'instagram' ? 'Instagram' : 'WhatsApp'} user...`}
-                    disabled={isTyping}
-                    className={`flex-1 px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl outline-none text-slate-900 dark:text-white transition-all disabled:opacity-50 ${activePlatform === 'instagram' ? 'focus:ring-2 focus:ring-pink-500' : 'focus:ring-2 focus:ring-green-500'}`}
-                />
-                <button 
-                    type="submit" 
-                    disabled={!inputMessage.trim() || isTyping}
-                    className={`disabled:opacity-50 disabled:cursor-not-allowed text-white p-3 rounded-xl transition-colors shadow-sm ${activePlatform === 'instagram' ? 'bg-pink-600 hover:bg-pink-700' : 'bg-green-600 hover:bg-green-700'}`}
-                >
-                    <Send size={20} />
-                </button>
-            </form>
+              ))
+          )}
         </div>
       </div>
+
+      {/* --- COLUMN 2: ACTIVE CHAT AREA --- */}
+      <div className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-900 relative">
+        {activeChat ? (
+            <>
+                {/* Chat Header */}
+                <div className="h-16 px-6 border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex items-center justify-between shadow-sm z-10">
+                    <div className="flex items-center">
+                        <div className="mr-3">
+                             <img src={activeChat.avatarUrl} alt="Avatar" className="w-10 h-10 rounded-full object-cover" />
+                        </div>
+                        <div>
+                            <h3 className="font-bold text-slate-800 dark:text-white text-sm">{activeChat.customerName}</h3>
+                            <div className="flex items-center text-xs text-slate-500 dark:text-slate-400">
+                                {activeChat.platform === 'instagram' ? <Instagram size={12} className="mr-1" /> : <MessageCircle size={12} className="mr-1" />}
+                                <span className="capitalize">{activeChat.platform}</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="flex items-center space-x-4">
+                        <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border transition-all ${activeChat.isAiPaused ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'}`}>
+                            <div className={`w-2 h-2 rounded-full ${activeChat.isAiPaused ? 'bg-amber-500' : 'bg-green-500 animate-pulse'}`}></div>
+                            <span className={`text-xs font-bold uppercase tracking-wider ${activeChat.isAiPaused ? 'text-amber-700 dark:text-amber-400' : 'text-green-700 dark:text-green-400'}`}>
+                                {activeChat.isAiPaused ? 'AI Paused' : 'AI Active'}
+                            </span>
+                            <button onClick={toggleAiStatus} className="ml-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                                {activeChat.isAiPaused ? <ZapOff size={14} /> : <Zap size={14} />}
+                            </button>
+                        </div>
+                        <button className="text-slate-400 hover:text-indigo-600 transition-colors">
+                            <MoreVertical size={20} />
+                        </button>
+                    </div>
+                </div>
+
+                {/* Messages Area */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-100 dark:bg-slate-950/50">
+                    <div className="text-center">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-200 dark:bg-slate-800 px-3 py-1 rounded-full">Today</span>
+                    </div>
+                    
+                    {activeChat.messages.map((msg) => {
+                        const isUser = msg.role === 'user' && !msg.isHumanOverride; // External Customer
+                        const isAi = msg.role === 'model';
+                        const isHumanAgent = msg.isHumanOverride; // You from CRM
+
+                        return (
+                            <div key={msg.id} className={`flex w-full ${isUser ? 'justify-start' : 'justify-end'}`}>
+                                <div className={`flex max-w-[70%] ${isUser ? 'flex-row' : 'flex-row-reverse'}`}>
+                                    {/* Avatar for bot or user */}
+                                    <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-1 shadow-sm ${isUser ? 'mr-2' : 'ml-2'} ${isAi ? 'bg-indigo-600 text-white' : (isHumanAgent ? 'bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900' : 'bg-white dark:bg-slate-700')}`}>
+                                        {isAi ? <Bot size={16} /> : (isHumanAgent ? <Server size={14} /> : <span className="text-xs font-bold">{activeChat.customerName[0]}</span>)}
+                                    </div>
+                                    
+                                    <div className={`flex flex-col ${isUser ? 'items-start' : 'items-end'}`}>
+                                        <div className={`px-4 py-3 rounded-2xl text-sm shadow-sm relative group ${
+                                            isUser 
+                                                ? 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-tl-none' 
+                                                : (isAi 
+                                                    ? 'bg-indigo-600 text-white rounded-tr-none' 
+                                                    : 'bg-indigo-500/90 text-white rounded-tr-none') // Human Agent style
+                                        }`}>
+                                            {msg.content}
+                                            {/* Human Override Badge */}
+                                            {isHumanAgent && <span className="absolute -top-2 -left-2 text-[8px] bg-slate-800 text-white px-1 py-0.5 rounded shadow">Agent</span>}
+                                        </div>
+                                        <span className="text-[10px] text-slate-400 mt-1 px-1">
+                                            {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    
+                    {isTyping && (
+                         <div className="flex justify-end">
+                            <div className="flex flex-row-reverse items-end">
+                                <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center ml-2 mb-1">
+                                    <Bot size={16} className="text-white" />
+                                </div>
+                                <div className="bg-indigo-50 dark:bg-indigo-900/30 px-4 py-3 rounded-2xl rounded-tr-none border border-indigo-100 dark:border-indigo-800 flex space-x-1">
+                                    <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce delay-0"></div>
+                                    <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce delay-150"></div>
+                                    <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce delay-300"></div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    <div ref={chatEndRef} />
+                </div>
+
+                {/* Input Area */}
+                <div className="p-4 bg-white dark:bg-slate-800 border-t border-gray-200 dark:border-slate-700">
+                    <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+                        <button type="button" className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                            <Paperclip size={20} />
+                        </button>
+                         <button type="button" className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                            <Smile size={20} />
+                        </button>
+                        <div className="flex-1 relative">
+                            <input 
+                                type="text" 
+                                value={inputText}
+                                onChange={e => setInputText(e.target.value)}
+                                placeholder="Type a message..." 
+                                className="w-full pl-4 pr-12 py-3 bg-slate-100 dark:bg-slate-900/50 border-none rounded-xl text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-500/50"
+                            />
+                        </div>
+                        <button 
+                            type="submit" 
+                            disabled={!inputText.trim()}
+                            className="p-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl shadow-md transition-all hover:scale-105"
+                        >
+                            <Send size={20} />
+                        </button>
+                    </form>
+                    <div className="text-center mt-2">
+                         <p className="text-[10px] text-slate-400">
+                             {activeChat.isAiPaused ? 'AI is paused. You are chatting manually.' : 'Sending a message will simulate user input. AI will respond automatically.'}
+                         </p>
+                    </div>
+                </div>
+            </>
+        ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+                <MessageCircle size={64} className="mb-4 opacity-20" />
+                <p>Select a conversation to start messaging</p>
+                <div className="mt-4">
+                     <button 
+                        onClick={simulateIncomingMessage}
+                        className="text-xs bg-indigo-50 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 px-4 py-2 rounded-lg font-medium hover:bg-indigo-100 transition-colors"
+                      >
+                          Start Test Chat
+                      </button>
+                </div>
+            </div>
+        )}
+      </div>
+
+      {/* --- COLUMN 3: CUSTOMER DETAILS --- */}
+      {activeChat && (
+        <div className="w-72 bg-white dark:bg-slate-800 border-l border-gray-200 dark:border-slate-700 flex flex-col overflow-y-auto">
+            <div className="p-6 text-center border-b border-gray-100 dark:border-slate-700">
+                <img src={activeChat.avatarUrl} alt="" className="w-20 h-20 rounded-full object-cover mx-auto mb-3 border-4 border-slate-50 dark:border-slate-700" />
+                <h2 className="text-lg font-bold text-slate-800 dark:text-white">{activeChat.customerName}</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400 flex items-center justify-center mt-1">
+                    <MapPin size={12} className="mr-1" /> Mumbai, India
+                </p>
+                
+                <div className="flex justify-center mt-4 space-x-2">
+                    <button className="p-2 bg-slate-100 dark:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-300 hover:text-indigo-600 transition-colors">
+                        <Phone size={16} />
+                    </button>
+                    <button className="p-2 bg-slate-100 dark:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-300 hover:text-indigo-600 transition-colors">
+                        <MessageCircle size={16} />
+                    </button>
+                </div>
+            </div>
+
+            <div className="p-6">
+                <div className="mb-6">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Tags</h4>
+                    <div className="flex flex-wrap gap-2">
+                        {activeChat.tags.map(tag => (
+                            <span key={tag.id} className={`text-xs px-2 py-1 rounded-md font-medium flex items-center ${tag.color}`}>
+                                {tag.label}
+                                <button onClick={() => deleteTag(tag.id)} className="ml-1 opacity-50 hover:opacity-100"><X size={10} /></button>
+                            </span>
+                        ))}
+                        <button onClick={addTag} className="text-xs px-2 py-1 rounded-md border border-dashed border-gray-300 dark:border-slate-600 text-slate-500 hover:text-indigo-600 hover:border-indigo-400 transition-colors flex items-center">
+                            <Plus size={10} className="mr-1" /> Add
+                        </button>
+                    </div>
+                </div>
+
+                <div className="mb-6">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Automation Control</h4>
+                     <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-lg border border-gray-100 dark:border-slate-700">
+                        <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">AI Auto-Reply</span>
+                            <button 
+                                onClick={toggleAiStatus}
+                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${!activeChat.isAiPaused ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                            >
+                                <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${!activeChat.isAiPaused ? 'translate-x-5' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+                        <p className="text-[10px] text-slate-400 leading-tight">
+                            {activeChat.isAiPaused 
+                             ? "AI is currently disabled for this chat. You must reply manually." 
+                             : "AI will automatically respond to new messages from this user."}
+                        </p>
+                    </div>
+                </div>
+
+                <div>
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Last Order</h4>
+                    <div className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg p-3 shadow-sm">
+                        <div className="flex justify-between items-start mb-2">
+                             <span className="text-xs font-bold text-slate-800 dark:text-white">#ORD-9821</span>
+                             <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Delivered</span>
+                        </div>
+                        <p className="text-xs text-slate-600 dark:text-slate-300 mb-1">Custom Engraved Watch</p>
+                        <p className="text-xs text-slate-400">Oct 24, 2024</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* Settings Modal Overlay */}
+      {showSettingsModal && renderSettingsModal()}
     </div>
   );
 };

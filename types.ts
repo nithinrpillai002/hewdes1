@@ -1,3 +1,4 @@
+
 export interface Product {
   id: string;
   name: string;
@@ -23,6 +24,26 @@ export interface Message {
   role: 'user' | 'model' | 'system' | 'developer' | 'assistant'; 
   content: string;
   timestamp: number;
+  isHumanOverride?: boolean; // To distinguish AI vs You
+}
+
+export interface Tag {
+  id: string;
+  label: string;
+  color: string;
+}
+
+export interface Conversation {
+  id: string;
+  customerName: string;
+  platform: 'whatsapp' | 'instagram';
+  lastMessage: string;
+  lastMessageTime: number;
+  unreadCount: number;
+  tags: Tag[];
+  isAiPaused: boolean;
+  messages: Message[];
+  avatarUrl?: string;
 }
 
 export interface PlatformConfig {
@@ -47,5 +68,5 @@ export enum Page {
   ANALYTICS = 'analytics',
   CRM = 'crm',
   PRODUCTS = 'products',
-  SETTINGS = 'settings', // New Settings page
+  SETTINGS = 'settings',
 }
