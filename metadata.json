@@ -1,5 +1,0 @@
-{
-  "name": "InstaCRM - Cloudflare Worker UI",
-  "description": "A modern React frontend for the Instagram DM CRM Cloudflare Worker module. Features real-time chat interface, settings management, server log monitoring, and AI-powered thread analysis.",
-  "requestFramePermissions": []
-}
