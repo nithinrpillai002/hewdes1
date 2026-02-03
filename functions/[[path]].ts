@@ -3,8 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 
 // --- IN-MEMORY STATE (Ephemeral per isolate) ---
 // NOTE: In Cloudflare Pages, this memory is cleared when the worker idles or recycles.
-// For a production CRM, you MUST use a database (Supabase, Firebase, Cloudflare D1).
-// This in-memory store allows the demo to work as long as the worker stays warm (active).
+// This means 'curl' might hit Instance A (and store data), but your Browser hits Instance B (empty data).
 let conversationsStore: any[] = [];
 let systemLogs: any[] = [];
 const MAX_LOGS = 100;
@@ -43,7 +42,10 @@ const addSystemLog = (method: string, url: string, status: number, outcome: stri
 const jsonResponse = (data: any, status = 200) => {
     return new Response(JSON.stringify(data), {
         status,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*' 
+        }
     });
 };
 
@@ -57,15 +59,12 @@ async function fetchInstagramProfile(igsid: string, token: string) {
     try {
         const response = await fetch(url);
         const data = await response.json();
-        
         if (!response.ok) {
              addSystemLog('GET', url, response.status, 'Profile Fetch Failed', 'system', data);
              return null;
         }
-        addSystemLog('GET', url, 200, 'Profile Details Received', 'system', data);
         return data;
     } catch (e: any) {
-        addSystemLog('GET', url, 500, 'Profile Fetch Error', 'system', { error: e.message });
         return null;
     }
 }
@@ -75,25 +74,15 @@ async function callInstagramApi(payload: any, token: string) {
         addSystemLog('POST', 'https://graph.facebook.com/...', 400, 'Missing IG Token', 'instagram', payload);
         return;
     }
-
     const url = `https://graph.facebook.com/${RUNTIME_GRAPH_VERSION}/me/messages?access_token=${token}`;
-
     try {
-        const response = await fetch(url, {
+        await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-
-        const resData = await response.json();
-        
-        if (!response.ok) {
-             addSystemLog('POST', url, response.status, 'Graph API Error', 'instagram', { request: payload, errorResponse: resData });
-        } else {
-             addSystemLog('POST', url, 200, 'Message Sent', 'instagram', { request: payload, response: resData });
-        }
-    } catch (e: any) {
-        addSystemLog('POST', url, 500, 'Network Error', 'instagram', { error: e.message });
+    } catch (e) {
+        console.error("Graph API Error", e);
     }
 }
 
@@ -101,39 +90,25 @@ async function callInstagramApi(payload: any, token: string) {
 
 async function generateAiResponse(conversationHistory: any[], apiKey: string) {
     if (!apiKey) return "I can't think right now (Missing API Key).";
-
     try {
         const ai = new GoogleGenAI({ apiKey });
+        const productContext = PRODUCT_CATALOG.map(p => `ID: ${p.id}, Name: ${p.name}, Price: ₹${p.price}`).join('\n');
+        const systemInstruction = `You are "Hewdes Bot". CATALOG: ${productContext}. Rules: Friendly, under 300 chars.`;
         
-        const productContext = PRODUCT_CATALOG.map(p => 
-            `ID: ${p.id}, Name: ${p.name}, Price: ₹${p.price}`
-        ).join('\n');
-
-        const systemInstruction = `
-            You are "Hewdes Bot", the AI assistant for Hewdes Gifts.
-            PRODUCT CATALOG: ${productContext}
-            Rules: Clear, friendly text only. No Markdown. Keep it under 300 chars.
-        `;
-
-        const historyForModel = conversationHistory.slice(-5).map(m => {
-             const role = m.role === 'model' ? 'model' : 'user';
-             return { role, parts: [{ text: m.content || "" }] };
-        });
+        const historyForModel = conversationHistory.slice(-5).map(m => ({ 
+            role: m.role === 'model' ? 'model' : 'user', 
+            parts: [{ text: m.content || "" }] 
+        }));
 
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
             contents: historyForModel,
-            config: {
-                systemInstruction: systemInstruction,
-                maxOutputTokens: 300,
-            },
+            config: { systemInstruction, maxOutputTokens: 300 },
         });
-
-        return response.text || "I'm having trouble thinking of a response.";
-
+        return response.text || "Thinking...";
     } catch (e) {
         console.error("AI Generation Error:", e);
-        return "I'm a bit busy right now. Please try again later.";
+        return "I'm a bit busy right now.";
     }
 }
 
@@ -145,13 +120,12 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
 
     console.log(`[HANDLE] Processing message from ${senderId}`);
 
-    // 1. Profile Fetch
-    const profileData = await fetchInstagramProfile(senderId, token);
-
-    // 2. CRM Update
+    // 1. CRM Update
     let conversation = conversationsStore.find(c => c.igsid === senderId);
     
     if (!conversation) {
+        // Try fetch profile, fallback to ID
+        const profileData = await fetchInstagramProfile(senderId, token);
         let profileName = `User ${senderId.slice(-4)}`;
         let profileAvatar = `https://ui-avatars.com/api/?name=User+${senderId.slice(-4)}&background=random`;
 
@@ -177,17 +151,12 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
         };
         conversationsStore.unshift(conversation);
     } else {
-        if (profileData) {
-             if (profileData.name) conversation.customerName = profileData.name;
-             if (profileData.profile_pic) conversation.avatarUrl = profileData.profile_pic;
-        }
-        // Move to top
         conversationsStore = conversationsStore.filter(c => c.id !== conversation.id);
         conversationsStore.unshift(conversation);
         conversation.unreadCount += 1;
     }
 
-    // 3. Store User Message
+    // 2. Store User Message
     const userText = incomingData.message?.text || "[Attachment]";
     conversation.messages.push({
         id: Date.now().toString(),
@@ -199,13 +168,12 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
     conversation.lastMessage = userText;
     conversation.lastMessageTime = Date.now();
 
-    // 4. AI Reply
+    // 3. AI Reply
     if (!conversation.isAiPaused && apiKey) {
-        await callInstagramApi({ recipient: { id: senderId }, sender_action: 'typing_on' }, token);
-        
         const aiText = await generateAiResponse(conversation.messages, apiKey);
         
-        await callInstagramApi({ recipient: { id: senderId }, message: { text: aiText } }, token);
+        // Send to Instagram (Fire & Forget to avoid blocking)
+        callInstagramApi({ recipient: { id: senderId }, message: { text: aiText } }, token);
         
         conversation.messages.push({
             id: (Date.now() + 1).toString(),
@@ -216,6 +184,8 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
         });
         conversation.lastMessage = aiText;
     }
+    
+    return { success: true, conversationId: conversation.id, messagesCount: conversation.messages.length };
 }
 
 // --- MAIN HANDLER (Cloudflare Pages Function) ---
@@ -223,24 +193,15 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
 export const onRequest = async (context: any) => {
     const { request, env } = context;
     const url = new URL(request.url);
-    
-    // Normalize path: Remove trailing slash to ensure consistency (e.g., /webhook/instagram/ -> /webhook/instagram)
     const path = url.pathname.replace(/\/$/, '');
     
-    // Debug Log: Allows checking if the request even reached the worker
-    if (path.includes('webhook')) {
-        console.log(`[DEBUG] Incoming Request to: ${path} | Method: ${request.method}`);
-    }
-
-    // Initialize Runtime Config from Env if empty
-    if (!RUNTIME_IG_TOKEN && env.IG_ACCESS_TOKEN) {
-        RUNTIME_IG_TOKEN = env.IG_ACCESS_TOKEN;
-    }
+    // Config Init
+    if (!RUNTIME_IG_TOKEN && env.IG_ACCESS_TOKEN) RUNTIME_IG_TOKEN = env.IG_ACCESS_TOKEN;
 
     // --- API ROUTES ---
 
     if (request.method === 'GET' && path === '/health') {
-        return jsonResponse({ status: 'ok', message: 'Hewdes CRM (Cloudflare) Active' });
+        return jsonResponse({ status: 'ok', storeSize: conversationsStore.length });
     }
 
     if (request.method === 'GET' && path === '/api/logs') {
@@ -248,6 +209,10 @@ export const onRequest = async (context: any) => {
     }
 
     if (request.method === 'GET' && path === '/api/conversations') {
+        // DEBUG: If empty, check if we should add a dummy for demo
+        if (conversationsStore.length === 0) {
+            console.log("[DEBUG] Conversations empty. Returning empty list.");
+        }
         return jsonResponse(conversationsStore);
     }
 
@@ -255,7 +220,6 @@ export const onRequest = async (context: any) => {
         const body: any = await request.json();
         if (body.igToken) RUNTIME_IG_TOKEN = body.igToken;
         if (body.graphVersion) RUNTIME_GRAPH_VERSION = body.graphVersion;
-        addSystemLog('POST', path, 200, 'Config Updated', 'system', body);
         return jsonResponse({ success: true });
     }
 
@@ -277,10 +241,7 @@ export const onRequest = async (context: any) => {
             conv.lastMessageTime = Date.now();
             conv.isAiPaused = true;
             
-            // Send to Instagram
-            const token = RUNTIME_IG_TOKEN || env.IG_ACCESS_TOKEN;
-            await callInstagramApi({ recipient: { id: conv.igsid }, message: { text: body.text } }, token);
-            
+            await callInstagramApi({ recipient: { id: conv.igsid }, message: { text: body.text } }, RUNTIME_IG_TOKEN);
             return jsonResponse({ success: true });
         }
         return jsonResponse({ error: 'Not found' }, 404);
@@ -305,21 +266,19 @@ export const onRequest = async (context: any) => {
             const token = url.searchParams.get('hub.verify_token');
             const challenge = url.searchParams.get('hub.challenge');
             
-            console.log(`[WEBHOOK] Verification request: mode=${mode}, token=${token}`);
-
             if (mode === 'subscribe' && token === VERIFY_TOKEN) {
                 addSystemLog('GET', path, 200, 'Webhook Verified', 'instagram', Object.fromEntries(url.searchParams));
                 return new Response(challenge, { status: 200 });
             }
-            addSystemLog('GET', path, 403, 'Verification Failed', 'instagram', Object.fromEntries(url.searchParams));
-            return new Response('Forbidden', { status: 403 });
+            return new Response('ok', { status: 200 });
         }
 
         // EVENT RECEIPT
         if (request.method === 'POST') {
+            const debugInfo: any = { processed: 0, errors: [] };
             try {
                 const body: any = await request.json();
-                console.log(`[WEBHOOK] Received Payload:`, JSON.stringify(body).substring(0, 200) + '...');
+                console.log(`[WEBHOOK] Received Payload Size: ${JSON.stringify(body).length}`);
 
                 if (body.object === 'instagram' || body.object === 'page') {
                     if (Array.isArray(body.entry)) {
@@ -327,26 +286,36 @@ export const onRequest = async (context: any) => {
                              const events = entry.messaging || entry.changes;
                              if (Array.isArray(events)) {
                                  for (const event of events) {
+                                     // Robust sender ID extraction
                                      const senderId = event.sender?.id || (event.value ? event.value.sender?.id : null);
+                                     
                                      if (senderId && !event.message?.is_echo) {
-                                         await handleIncomingMessage(senderId, event, env);
+                                         const result = await handleIncomingMessage(String(senderId), event, env);
+                                         debugInfo.processed++;
+                                         debugInfo.lastResult = result;
                                      }
                                  }
                              }
                         }
                     }
                 }
-                addSystemLog('POST', path, 200, 'Webhook Processed', 'instagram', body);
-                return new Response('EVENT_RECEIVED', { status: 200 });
+                
+                // CRITICAL: Log specifically for the Curl user
+                addSystemLog('POST', path, 200, 'Webhook Processed', 'instagram', { count: debugInfo.processed });
+                
+                // Return Verbose JSON instead of just 'EVENT_RECEIVED' so you can see it in terminal
+                return new Response(JSON.stringify({ 
+                    status: 'EVENT_RECEIVED', 
+                    debug: debugInfo, 
+                    serverStoreSize: conversationsStore.length 
+                }), { status: 200, headers: {'Content-Type': 'application/json'} });
+
             } catch (e: any) {
-                console.error(`[WEBHOOK] Error processing:`, e);
-                addSystemLog('POST', path, 500, 'Webhook Error', 'instagram', { error: e.message });
-                // Return 200 even on error to stop Facebook from retrying and disabling the webhook
-                return new Response('Error handled', { status: 200 });
+                console.error(`[WEBHOOK] Error:`, e);
+                return new Response(JSON.stringify({ error: e.message }), { status: 200 });
             }
         }
     }
 
-    // Fallthrough to static assets
     return context.next();
 };
