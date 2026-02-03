@@ -2,7 +2,7 @@ import { Thread, Message, LogEntry, Settings, AIAnalysisResponse } from '../type
 import { MOCK_THREADS, MOCK_LOGS } from './mockData';
 import { MOCK_DELAY_MS, DEFAULT_SETTINGS } from '../constants';
 
-const USE_MOCK = false; // Set to false to try real backend
+const USE_MOCK = false; // Set to false so we only show LIVE if real server connects
 const API_BASE = '/api';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -13,9 +13,13 @@ export const api = {
       await delay(MOCK_DELAY_MS);
       return [...MOCK_THREADS];
     }
-    const res = await fetch(`${API_BASE}/threads`);
-    if (!res.ok) throw new Error('Failed to fetch threads');
-    return res.json();
+    try {
+      const res = await fetch(`${API_BASE}/threads`);
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      return await res.json();
+    } catch (error) {
+      throw error;
+    }
   },
 
   fetchThreadDetails: async (threadId: string): Promise<Thread> => {
@@ -67,9 +71,7 @@ export const api = {
     }
     const res = await fetch(`${API_BASE}/settings`);
     if (!res.ok) {
-        // If settings endpoint fails (e.g. first run), return defaults locally so UI works
-        console.warn("Failed to fetch settings, using defaults");
-        return DEFAULT_SETTINGS;
+        throw new Error('Failed to fetch settings');
     }
     return res.json();
   },
@@ -91,7 +93,7 @@ export const api = {
     if (USE_MOCK) {
       await delay(1500);
       return {
-        analysis: `**Analysis for Thread ${threadId}**\n\nBased on the conversation, the user seems interested... (MOCK)`,
+        analysis: "AI Analysis unavailable in mock mode. Connect a backend to use KIE Gemini 3 Pro.",
       };
     }
     const res = await fetch(`${API_BASE}/ai/analyze`, {
