@@ -4,7 +4,6 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
-import { GoogleGenAI, Type } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,8 +26,9 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'hewdes_rttf0kd11o1axrmc';
 
-// Initialize Google GenAI
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || 'dummy_key_for_build' });
+// --- KIE API CONFIGURATION ---
+const KIE_API_KEY = process.env.KIE_API_KEY || '3a748f6c1558e84cf2ca54b22c393832';
+const KIE_ENDPOINT = "https://api.kie.ai/gemini-3-flash/v1/chat/completions";
 
 // --- IN-MEMORY DATABASE ---
 let conversationsStore = []; 
@@ -36,7 +36,6 @@ let systemLogs = [];
 const MAX_LOGS = 50;
 
 // --- DYNAMIC CONFIGURATION (In-Memory) ---
-// These allow the Settings page to update server behavior without restart
 let IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || '';
 let WA_ACCESS_TOKEN = process.env.WA_ACCESS_TOKEN || '';
 
@@ -84,7 +83,7 @@ const addSystemLog = (method, url, status, outcome, source, payload) => {
   if (status >= 400) console.error(`[LOG-ERROR] ${outcome}`);
 };
 
-// --- INSTAGRAM API HELPER (PDF Requirement) ---
+// --- INSTAGRAM API HELPER ---
 async function fetchInstagramProfile(igsid) {
     if (!IG_ACCESS_TOKEN) {
         console.log(`[IG-API] No Access Token set. Skipping profile fetch for ${igsid}.`);
@@ -113,9 +112,8 @@ async function fetchInstagramProfile(igsid) {
     }
 }
 
-// --- INSTAGRAM PAYLOAD CONSTRUCTORS (Strictly per PDF Pages 15-18) ---
+// --- INSTAGRAM PAYLOAD CONSTRUCTORS ---
 
-// PDF 5.1: Send Text Message
 const constructTextMessage = (recipientId, text) => {
     return {
         recipient: { id: recipientId },
@@ -123,7 +121,6 @@ const constructTextMessage = (recipientId, text) => {
     };
 };
 
-// PDF 5.2: Send Message with Quick Replies
 const constructQuickReplyMessage = (recipientId, text, quickReplies) => {
     return {
         recipient: { id: recipientId },
@@ -131,14 +128,13 @@ const constructQuickReplyMessage = (recipientId, text, quickReplies) => {
             text: text,
             quick_replies: quickReplies.map(qr => ({
                 content_type: 'text',
-                title: qr.title.substring(0, 20), // PDF Constraint: Title max 20 chars
+                title: qr.title.substring(0, 20),
                 payload: qr.payload
             }))
         }
     };
 };
 
-// PDF 5.4: Send Generic Template (Product Card)
 const constructGenericTemplate = (recipientId, elements) => {
     return {
         recipient: { id: recipientId },
@@ -147,22 +143,21 @@ const constructGenericTemplate = (recipientId, elements) => {
                 type: 'template',
                 payload: {
                     template_type: 'generic',
-                    elements: elements.slice(0, 10) // PDF Constraint: Max 10 elements
+                    elements: elements.slice(0, 10)
                 }
             }
         }
     };
 };
 
-// PDF 5.5: React to Message (Sender Action)
 const constructSenderAction = (recipientId, action) => {
     return {
         recipient: { id: recipientId },
-        sender_action: action // e.g., 'typing_on', 'mark_seen'
+        sender_action: action
     };
 };
 
-// --- AI LOGIC using @google/genai ---
+// --- AI LOGIC using KIE API (fetch) ---
 async function generateAiResponse(conversationHistory, productCatalog) {
     try {
         const productContext = productCatalog.map(p => 
@@ -178,8 +173,8 @@ async function generateAiResponse(conversationHistory, productCatalog) {
             ${productContext}
             
             OUTPUT RULES:
-            You must output a strictly valid JSON object adhering to this schema.
-            Do NOT output markdown. Do NOT output plain text.
+            You must output a strictly valid JSON object adhering to the schema below.
+            Do NOT output markdown code blocks. Just the raw JSON.
             
             Schema:
             {
@@ -191,44 +186,50 @@ async function generateAiResponse(conversationHistory, productCatalog) {
         `;
 
         const historyForModel = conversationHistory.slice(-5).map(m => {
-            const role = m.role === 'model' ? 'model' : 'user';
+            const role = m.role === 'model' ? 'assistant' : 'user';
             const text = m.type === 'template' ? "Sent product cards" : (m.content || "");
-            return { role, parts: [{ text }] };
+            return { role, content: text };
         });
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: historyForModel.length > 0 ? historyForModel : [{ role: 'user', parts: [{ text: 'Hello' }] }],
-            config: {
-                systemInstruction: systemInstruction,
-                responseMimeType: "application/json",
-                // Using responseSchema to enforce strict structure
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        intent: { type: Type.STRING, enum: ["TEXT_REPLY", "SHOW_PRODUCTS", "ASK_WITH_OPTIONS"] },
-                        text: { type: Type.STRING },
-                        productIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        options: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    title: { type: Type.STRING },
-                                    payload: { type: Type.STRING }
-                                },
-                                required: ["title", "payload"]
-                            }
-                        }
-                    },
-                    required: ["intent", "text"]
-                }
-            }
+        const messages = [
+            { role: "system", content: systemInstruction },
+            ...historyForModel
+        ];
+
+        // Call KIE API
+        const response = await fetch(KIE_ENDPOINT, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${KIE_API_KEY}`
+            },
+            body: JSON.stringify({
+                messages: messages,
+                temperature: 0.7,
+                response_format: { type: "json_object" } // Enforce JSON response if supported by provider
+            })
         });
 
-        if (response.text) {
-            return JSON.parse(response.text);
+        if (!response.ok) {
+            const err = await response.text();
+            console.error("KIE API Error:", err);
+            throw new Error(`KIE API responded with ${response.status}`);
         }
+
+        const data = await response.json();
+        const rawContent = data.choices?.[0]?.message?.content;
+
+        if (rawContent) {
+            try {
+                // Remove any potential markdown formatting ```json ... ```
+                const cleanJson = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
+                return JSON.parse(cleanJson);
+            } catch (e) {
+                console.error("Failed to parse JSON from AI:", rawContent);
+                return { intent: "TEXT_REPLY", text: rawContent }; // Fallback
+            }
+        }
+        
         return { intent: "TEXT_REPLY", text: "I apologize, I'm having trouble connecting right now." };
 
     } catch (e) {
@@ -244,8 +245,6 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
     // 1. CRM Lookup / Create (Section 6.2)
     let conversation = conversationsStore.find(c => c.igsid === senderId);
     
-    // "on receiving a message, it should open a new chat"
-    // Fetch profile data ONLY if it's a new chat to save API calls, or if we want to refresh.
     if (!conversation) {
         let profileName = `User ${senderId.slice(-4)}`;
         let profileAvatar = `https://ui-avatars.com/api/?name=User+${senderId.slice(-4)}&background=random`;
@@ -316,11 +315,11 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
 
     // 3. AI Processing (Strict Output Formatting)
     if (!conversation.isAiPaused) {
-        // Send Typing Indicator (PDF 5.6)
+        // Send Typing Indicator
         const typingPayload = constructSenderAction(senderId, 'typing_on');
         addSystemLog('POST', 'https://graph.facebook.com/v18.0/me/messages', 200, 'Typing Indicator', platform, typingPayload);
 
-        // Call Gemini
+        // Call Gemini via KIE
         const aiDecision = await generateAiResponse(conversation.messages, PRODUCT_CATALOG);
         let finalPayload = {};
         let storedMessage = {
@@ -331,7 +330,7 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
             type: 'text'
         };
 
-        // Construct Payload based on Intent (PDF Specs)
+        // Construct Payload based on Intent
         if (aiDecision.intent === 'SHOW_PRODUCTS' && aiDecision.productIds) {
             const elements = aiDecision.productIds.map(pid => {
                 const prod = PRODUCT_CATALOG.find(p => p.id === pid);
@@ -355,7 +354,6 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
                     payload: { template_type: 'generic', elements }
                 }];
             } else {
-                // Fallback to text if products not found
                 finalPayload = constructTextMessage(senderId, aiDecision.text);
             }
         } 
@@ -369,7 +367,6 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
             }));
         } 
         else {
-            // Default TEXT_REPLY
             finalPayload = constructTextMessage(senderId, aiDecision.text);
         }
 
@@ -381,12 +378,12 @@ async function handleIncomingMessageFlow(platform, senderId, incomingData) {
     }
 }
 
-// --- WEBHOOK HANDLER (PDF Section 4) ---
+// --- WEBHOOK HANDLER ---
 const handleWebhookEvent = async (req, res, platform) => {
   const body = req.body;
   addSystemLog('POST', req.url, 200, 'Webhook Received', platform, body);
 
-  // Parse Standard Meta Payload (PDF 4.1)
+  // Parse Standard Meta Payload
   if (body.object === 'instagram' || body.object === 'page') {
       if (Array.isArray(body.entry)) {
           for (const entry of body.entry) {
