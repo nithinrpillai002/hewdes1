@@ -3,6 +3,18 @@
   publish = "dist"
   functions = "netlify/functions"
 
+# API Redirects - These must be before the catch-all
+[[redirects]]
+  from = "/api/webhook"
+  to = "/.netlify/functions/instagram-webhook"
+  status = 200
+
+[[redirects]]
+  from = "/api/instagram"
+  to = "/.netlify/functions/instagram-api"
+  status = 200
+
+# SPA Catch-all
 [[redirects]]
   from = "/*"
   to = "/index.html"

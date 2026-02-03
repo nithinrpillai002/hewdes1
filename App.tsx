@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { MessageSquare, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { MessageSquare, RefreshCw, Activity } from 'lucide-react';
 import SettingsPanel from './components/SettingsPanel';
 import ChatList from './components/ChatList';
 import ChatWindow from './components/ChatWindow';
@@ -25,6 +25,9 @@ const App: React.FC = () => {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [serverStatus, setServerStatus] = useState<'checking' | 'connected' | 'error'>('checking');
+  
+  // Track processed event IDs to avoid duplicates during polling
+  const processedEventIds = useRef<Set<string>>(new Set());
 
   // --- Logging Helper ---
   const addLog = useCallback((message: string, type: LogType = 'info', data?: any) => {
@@ -59,19 +62,19 @@ const App: React.FC = () => {
     const checkServer = async () => {
       try {
         addLog('Connecting to server...', 'info');
-        // Cloudflare endpoint
         const res = await fetch('/api/webhook?mode=ping');
         
-        // Handle non-JSON responses (like 404 HTML pages)
+        // Validate response type
         const contentType = res.headers.get('content-type');
         if (!contentType || !contentType.includes('application/json')) {
-          throw new Error('Endpoint returned non-JSON response. Check server deployment.');
+          // If we get HTML, the redirect rules in netlify.toml might be broken or not applied yet
+          throw new Error('Endpoint returned non-JSON response. Check netlify.toml redirects.');
         }
 
         if (res.ok) {
           const data = await res.json();
           setServerStatus('connected');
-          addLog('Server initialized: Cloudflare Functions active', 'info', data);
+          addLog('Server initialized: Connected to Functions', 'info', data);
         } else {
           setServerStatus('error');
           addLog(`Server check failed: Status ${res.status}`, 'error');
@@ -105,11 +108,52 @@ const App: React.FC = () => {
     };
 
     return () => {
-      // Cleanup
       delete (window as any).simulateWebhook;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run once on mount
+  }, []);
+
+  // --- Polling Logic ---
+  // Poll server for new webhooks every 3 seconds
+  useEffect(() => {
+    if (serverStatus !== 'connected') return;
+
+    const pollEvents = async () => {
+      try {
+        const res = await fetch('/api/webhook?mode=events');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.events && Array.isArray(data.events)) {
+            // Process events in chronological order (oldest first if they come reversed)
+            const events = data.events.reverse();
+            
+            let newEventsCount = 0;
+            for (const event of events) {
+              if (!processedEventIds.current.has(event._id)) {
+                processedEventIds.current.add(event._id);
+                newEventsCount++;
+                
+                // Add to visible log
+                addLog(`Server received webhook (${event._id.substring(0,6)})`, 'incoming', event.payload);
+                
+                // Process logic
+                await handleWebhook(event.payload);
+              }
+            }
+            if (newEventsCount > 0) {
+              console.log(`Processed ${newEventsCount} new events from server.`);
+            }
+          }
+        }
+      } catch (e) {
+        // Silent fail on poll errors to avoid log spam
+        console.error("Polling error", e);
+      }
+    };
+
+    const intervalId = setInterval(pollEvents, 3000);
+    return () => clearInterval(intervalId);
+  }, [serverStatus, addLog]); // Dependencies needed for closure context
 
   // --- Logic ---
 
@@ -120,9 +164,9 @@ const App: React.FC = () => {
   };
 
   const getUserProfile = async (senderId: string): Promise<UserProfile> => {
+    // Only attempt fetch if we have a token, otherwise fallback immediately
     if (!config.bearerToken) {
-      addLog('Error: Bearer token not configured', 'error');
-      // Return dummy data so the app still works in demo mode
+      addLog('Bearer token missing - skipping profile fetch', 'info');
       return {
         id: senderId,
         name: `User ${senderId.substr(0, 5)}`,
@@ -151,16 +195,16 @@ const App: React.FC = () => {
       });
       
       const data = await response.json();
-      addLog('User profile received', 'incoming', data);
       
       if (data.error) {
-        throw new Error(data.error.message || 'Unknown API error');
+        addLog(`Profile API Warning: ${data.error.message}`, 'error', data);
+        throw new Error(data.error.message);
       }
-
+      
+      addLog('User profile received', 'incoming', data);
       return data;
     } catch (error: any) {
-      addLog(`Error fetching profile: ${error.message}`, 'error', error);
-      // Fallback
+      // Fallback on error
       return {
         id: senderId,
         name: `User ${senderId.substr(0, 5)}`,
@@ -170,21 +214,23 @@ const App: React.FC = () => {
     }
   };
 
+  // Wrapped in useRef or useCallback if passed down, but here straightforward
   const handleWebhook = async (payload: WebhookPayload) => {
-    addLog('Incoming webhook received', 'incoming', payload);
-
     if (payload.object === 'instagram') {
       for (const entry of payload.entry) {
+        if (!entry.messaging) continue;
+        
         for (const messaging of entry.messaging) {
           const senderId = messaging.sender.id;
           const messageData = messaging.message;
+          
+          if (!messageData) continue; // Skip delivery confirmations/read receipts for now
 
-          // Check if we already have this conversation
+          // 1. Update Conversation State
           setConversations(currentConvos => {
             const exists = currentConvos.find(c => c.id === senderId);
             
             if (exists) {
-              // Update existing
               const newMessage: any = {
                 id: messageData.mid || 'msg_' + Date.now(),
                 text: messageData.text,
@@ -192,7 +238,7 @@ const App: React.FC = () => {
                 type: 'received'
               };
               
-              // Only add if not duplicate (simple check)
+              // De-duplicate messages
               const msgExists = exists.messages.some(m => m.id === newMessage.id);
               if (msgExists) return currentConvos;
 
@@ -207,39 +253,46 @@ const App: React.FC = () => {
                 return c;
               });
             }
-            return currentConvos; // If new, we handle async below
+            return currentConvos;
           });
 
-          // If it's a new sender, we need to fetch profile first
-          const exists = conversations.find(c => c.id === senderId);
-          if (!exists) {
-             const userProfile = await getUserProfile(senderId);
+          // 2. Fetch Profile if New
+          setConversations(current => {
+             // We do a check inside the functional update or separate logic.
+             // Since getting profile is async, we do it outside.
+             return current;
+          });
+
+          // Check existence using current state reference inside async flow
+          // Note: accessing 'conversations' state directly here might be stale, but adequate for this demo flow.
+          // Better to check a ref or just always try to update.
+          const userProfile = await getUserProfile(senderId);
              
-             const newConvo: Conversation = {
-               id: senderId,
-               name: userProfile.name || 'Unknown User',
-               username: userProfile.username || senderId,
-               profilePic: userProfile.profile_pic || 'https://via.placeholder.com/48',
-               messages: [{
-                 id: messageData.mid || 'msg_' + Date.now(),
-                 text: messageData.text,
-                 timestamp: messaging.timestamp || Date.now(),
-                 type: 'received'
-               }],
-               lastMessage: messageData.text
-             };
+          setConversations(prev => {
+            const existing = prev.find(c => c.id === senderId);
+            if (existing) return prev; // Already added by race condition or previous loop
 
-             setConversations(prev => {
-               // Check again to avoid race conditions
-               if (prev.find(c => c.id === senderId)) return prev;
-               return [newConvo, ...prev];
-             });
-
-             // Auto select if it's the first one
-             if (conversations.length === 0 && !activeConversationId) {
-                setActiveConversationId(newConvo.id);
-             }
-          }
+            const newConvo: Conversation = {
+              id: senderId,
+              name: userProfile.name || 'Unknown User',
+              username: userProfile.username || senderId,
+              profilePic: userProfile.profile_pic || 'https://via.placeholder.com/48',
+              messages: [{
+                id: messageData.mid || 'msg_' + Date.now(),
+                text: messageData.text,
+                timestamp: messaging.timestamp || Date.now(),
+                type: 'received'
+              }],
+              lastMessage: messageData.text
+            };
+            
+            // If this is the first conversation, select it
+            if (prev.length === 0) {
+               setActiveConversationId(newConvo.id);
+            }
+            
+            return [newConvo, ...prev];
+          });
         }
       }
     }
@@ -295,14 +348,14 @@ const App: React.FC = () => {
       });
       
       const result = await response.json();
-      addLog('Message sent successfully', 'incoming', result);
-
+      
       if (result.error) {
          throw new Error(result.error.message);
       }
+      
+      addLog('Message sent successfully', 'incoming', result);
     } catch (error: any) {
       addLog(`Error sending message: ${error.message}`, 'error', error);
-      alert(`Failed to send message: ${error.message}`);
     }
   };
 
@@ -334,7 +387,12 @@ const App: React.FC = () => {
             <MessageSquare className="text-crm-primary" />
             <h1 className="font-bold text-lg">Instagram CRM</h1>
           </div>
-          <div className={`w-3 h-3 rounded-full ${statusColor} transition-colors duration-500`} title={statusTitle} />
+          <div className="flex items-center gap-2">
+             <div className="text-[10px] text-crm-textSecondary uppercase tracking-wide">
+                {serverStatus === 'connected' ? 'LIVE' : 'OFFLINE'}
+             </div>
+             <div className={`w-3 h-3 rounded-full ${statusColor} animate-pulse`} title={statusTitle} />
+          </div>
         </div>
         
         <ChatList 
