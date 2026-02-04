@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Product, AiRule, Message, Conversation } from '../types';
 import { 
   Instagram, Bot, Send, Search, Settings as SettingsIcon, 
-  Trash, MapPin, Zap, ZapOff, Paperclip, Phone, MessageCircle, Inbox, RefreshCw
+  Trash, MapPin, Zap, ZapOff, Paperclip, Phone, MessageCircle, Inbox
 } from 'lucide-react';
 
 interface CRMProps {
@@ -19,38 +19,34 @@ const CRM: React.FC<CRMProps> = ({ products }) => {
   const [inputText, setInputText] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevConversationsLength = useRef(0);
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Derived State
   const activeChat = conversations.find(c => c.id === selectedChatId);
 
   // --- POLLING & SCROLLING ---
-  const fetchConversations = async () => {
-      setIsRefreshing(true);
-      try {
-          const res = await fetch('/api/conversations');
-          if (res.ok) {
-              const data = await res.json();
-              setConversations(data);
-              
-              if (data.length > prevConversationsLength.current) {
-                  const newestChat = data[0];
-                  if (newestChat && prevConversationsLength.current > 0) {
-                      setSelectedChatId(newestChat.id);
-                  }
-              }
-              prevConversationsLength.current = data.length;
-          }
-      } catch (e) {
-          console.error("Polling error:", e);
-      } finally {
-          setIsRefreshing(false);
-      }
-  };
-
   useEffect(() => {
+      const fetchConversations = async () => {
+          try {
+              const res = await fetch('/api/conversations');
+              if (res.ok) {
+                  const data = await res.json();
+                  setConversations(data);
+                  
+                  if (data.length > prevConversationsLength.current) {
+                      const newestChat = data[0];
+                      if (newestChat && prevConversationsLength.current > 0) {
+                          setSelectedChatId(newestChat.id);
+                      }
+                  }
+                  prevConversationsLength.current = data.length;
+              }
+          } catch (e) {
+              console.error("Polling error:", e);
+          }
+      };
+
       fetchConversations(); 
-      const interval = setInterval(fetchConversations, 3000); 
+      const interval = setInterval(fetchConversations, 2000); 
       return () => clearInterval(interval);
   }, []);
 
@@ -116,19 +112,10 @@ const CRM: React.FC<CRMProps> = ({ products }) => {
     }
   };
 
-  const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
+  const handleDeleteConversation = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    
-    // UI Optimistic Delete
     setConversations(prev => prev.filter(c => c.id !== id));
     if (selectedChatId === id) setSelectedChatId(null);
-    
-    // API Call
-    try {
-        await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
-    } catch (err) {
-        console.error("Failed to delete conversation", err);
-    }
   };
 
   return (
@@ -139,13 +126,6 @@ const CRM: React.FC<CRMProps> = ({ products }) => {
         <div className="p-4 border-b border-gray-100 dark:border-slate-700">
           <div className="flex items-center justify-between mb-4">
              <h2 className="text-xl font-bold text-slate-800 dark:text-white tracking-tight">Instagram DMs</h2>
-             <button 
-                onClick={fetchConversations}
-                className={`p-2 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-all ${isRefreshing ? 'animate-spin text-indigo-600' : ''}`}
-                title="Force Refresh List"
-             >
-                <RefreshCw size={16} />
-             </button>
           </div>
           
           <div className="relative mb-3">
@@ -163,12 +143,9 @@ const CRM: React.FC<CRMProps> = ({ products }) => {
               <div className="flex flex-col items-center justify-center h-64 px-6 text-center">
                   <Inbox size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
                   <h3 className="text-slate-800 dark:text-white font-semibold mb-1">No Messages</h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-                      Waiting for incoming webhooks...
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Waiting for Instagram Webhooks...
                   </p>
-                  <div className="p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-xs rounded border border-amber-200 dark:border-amber-800">
-                      <strong>Tip:</strong> If 'curl' works but this list is empty, Cloudflare is recycling the server memory. A database is required for persistent production use.
-                  </div>
               </div>
           ) : (
               conversations.map(chat => (
