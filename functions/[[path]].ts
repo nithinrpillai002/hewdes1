@@ -239,13 +239,21 @@ async function generateAiResponse(conversationHistory: any[], apiKey: string, cu
 
             const data: any = await response.json();
 
+            // Detect logical success (HTTP 200 + valid choice content + NO logic error code)
+            const isLogicalSuccess = response.ok && !(data && data.code === 500) && (data.choices?.[0]?.message?.content);
+            
+            // Determine outcome label for logging
+            let outcomeLabel = `AI Failed (${modelName})`;
+            if (isLogicalSuccess) outcomeLabel = `AI Success (${modelName})`;
+            else if (data && data.code === 500) outcomeLabel = `AI Error 500 (${modelName})`;
+
             // Log attempt
             await addSystemLog(
                 db,
                 'POST',
                 KIE_API_ENDPOINT,
                 response.status,
-                response.ok ? `AI Success (${modelName})` : `AI Failed (${modelName})`,
+                outcomeLabel,
                 'system',
                 { 
                     model: modelName,
@@ -253,13 +261,21 @@ async function generateAiResponse(conversationHistory: any[], apiKey: string, cu
                     response: data 
                 }
             );
+            
+            // --- SPECIFIC ERROR CHECK ---
+            // If the API returns a 200 OK (or any status) but with { code: 500, msg: "..." } in the body, treat as failure and retry.
+            if (data && data.code === 500) {
+                 console.warn(`[AI] Model ${modelName} returned specific error 500: ${data.msg}. Retrying with next model...`);
+                 lastError = data;
+                 continue; // Try next model
+            }
 
-            if (response.ok) {
-                successResponse = data.choices?.[0]?.message?.content;
+            if (isLogicalSuccess) {
+                successResponse = data.choices[0].message.content;
                 break; // Exit loop on success
             } else {
                 lastError = data;
-                console.warn(`[AI] Model ${modelName} failed. Trying next...`);
+                console.warn(`[AI] Model ${modelName} failed or returned invalid format. Trying next...`);
             }
 
         } catch (e: any) {
