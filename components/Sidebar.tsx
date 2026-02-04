@@ -1,6 +1,7 @@
+
 import React from 'react';
 import { Page } from '../types';
-import { LayoutDashboard, MessageSquareText, ShoppingBag, Settings, LogOut, Gift, Code, FlaskConical, Activity } from 'lucide-react';
+import { LayoutDashboard, MessageSquareText, ShoppingBag, Settings, LogOut, Gift, Code, FlaskConical, Activity, Sparkles } from 'lucide-react';
 
 interface SidebarProps {
   currentPage: Page;
@@ -61,6 +62,18 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate }) => {
         >
           <Activity size={20} />
           <span>Live Monitor</span>
+        </button>
+
+        <button 
+            onClick={() => onNavigate(Page.AI_SETTINGS)}
+            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
+                currentPage === Page.AI_SETTINGS 
+                ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 font-medium' 
+                : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white'
+            }`}
+        >
+          <Sparkles size={20} />
+          <span>AI Setting</span>
         </button>
 
         <button 

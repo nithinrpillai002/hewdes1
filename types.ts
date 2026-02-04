@@ -102,6 +102,7 @@ export enum Page {
   ANALYTICS = 'analytics',
   CRM = 'crm',
   PRODUCTS = 'products',
+  AI_SETTINGS = 'ai_settings',
   SETTINGS = 'settings',
   DEVELOPER = 'developer',
 }

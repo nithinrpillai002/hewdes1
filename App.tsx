@@ -1,9 +1,11 @@
+
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Analytics from './pages/Analytics';
 import Products from './pages/Products';
 import CRM from './pages/CRM';
 import Settings from './pages/Settings';
+import AiSettings from './pages/AiSettings';
 import Developer from './pages/Developer';
 import { Page, Product, AiRule } from './types';
 
@@ -84,6 +86,8 @@ const App: React.FC = () => {
         return <Products products={products} setProducts={setProducts} />;
       case Page.CRM:
         return <CRM products={products} rules={rules} setRules={setRules} />;
+      case Page.AI_SETTINGS:
+        return <AiSettings />;
       case Page.SETTINGS:
         return <Settings darkMode={darkMode} setDarkMode={setDarkMode} />;
       case Page.DEVELOPER:
