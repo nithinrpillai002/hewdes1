@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Save, Key, MessageSquare, Sparkles, Plus, Trash2, Edit2, ToggleLeft, ToggleRight, X } from 'lucide-react';
+import { Save, Key, MessageSquare, Sparkles, Plus, Trash2, Edit2, ToggleLeft, ToggleRight, X, ArrowUp, ArrowDown, Cpu, Loader2, CheckCircle } from 'lucide-react';
 
 interface Instruction {
     id: string;
@@ -12,8 +12,11 @@ interface Instruction {
 const AiSettings: React.FC = () => {
   const [kieApiKey, setKieApiKey] = useState('');
   const [instructions, setInstructions] = useState<Instruction[]>([]);
+  const [models, setModels] = useState<string[]>(['gemini-3-flash']);
+  const [newModel, setNewModel] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   // Modal State
   const [showModal, setShowModal] = useState(false);
@@ -31,14 +34,18 @@ const AiSettings: React.FC = () => {
             const data = await res.json();
             setKieApiKey(data.kieApiKey || '');
             
-            // Handle parsing of instructions which might be string or JSON array
+            // Models
+            if (data.aiModels && Array.isArray(data.aiModels)) {
+                setModels(data.aiModels);
+            }
+
+            // Instructions
             if (data.aiInstruction) {
                 try {
                     const parsed = JSON.parse(data.aiInstruction);
                     if (Array.isArray(parsed)) {
                         setInstructions(parsed);
                     } else {
-                        // Legacy single string support
                         setInstructions([{ 
                             id: 'legacy', 
                             label: 'General Instructions', 
@@ -47,7 +54,6 @@ const AiSettings: React.FC = () => {
                         }]);
                     }
                 } catch (e) {
-                     // Plain text string support
                      setInstructions([{ 
                         id: 'legacy', 
                         label: 'General Instructions', 
@@ -64,31 +70,73 @@ const AiSettings: React.FC = () => {
     }
   };
 
-  const handleSaveAll = async () => {
-    try {
+  // Helper to save configuration to DB
+  const persistConfig = async (overrideInstructions?: Instruction[], overrideModels?: string[], overrideKey?: string) => {
+      setSaving(true);
+      try {
+        const body = {
+            kieApiKey: overrideKey !== undefined ? overrideKey : kieApiKey,
+            aiInstruction: JSON.stringify(overrideInstructions || instructions),
+            aiModels: overrideModels || models
+        };
+
         await fetch('/api/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                kieApiKey: kieApiKey,
-                aiInstruction: JSON.stringify(instructions)
-            })
+            body: JSON.stringify(body)
         });
-        alert('AI Settings & Instructions Saved!');
-    } catch (e) {
-        console.error("Failed to sync config to server", e);
-        alert('Failed to save settings.');
-    }
+      } catch (e) {
+          console.error("Failed to save", e);
+          alert("Failed to save changes to database.");
+      } finally {
+          setTimeout(() => setSaving(false), 500);
+      }
   };
 
+  // Manual save for API Key
+  const handleManualSave = () => {
+      persistConfig();
+  };
+
+  // --- MODEL MANAGEMENT ---
+  const addModel = () => {
+      if (newModel && !models.includes(newModel)) {
+          const updated = [...models, newModel];
+          setModels(updated);
+          setNewModel('');
+          persistConfig(undefined, updated);
+      }
+  };
+
+  const removeModel = (index: number) => {
+      const updated = [...models];
+      updated.splice(index, 1);
+      setModels(updated);
+      persistConfig(undefined, updated);
+  };
+
+  const moveModel = (index: number, direction: 'up' | 'down') => {
+      if ((direction === 'up' && index === 0) || (direction === 'down' && index === models.length - 1)) return;
+      const updated = [...models];
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      const temp = updated[index];
+      updated[index] = updated[targetIndex];
+      updated[targetIndex] = temp;
+      setModels(updated);
+      persistConfig(undefined, updated);
+  };
+
+  // --- INSTRUCTION MANAGEMENT ---
   const handleAddOrUpdateInstruction = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentInstruction.label || !currentInstruction.content) return;
 
+    let updatedInstructions: Instruction[];
+
     if (editingId) {
-        setInstructions(prev => prev.map(inst => 
+        updatedInstructions = instructions.map(inst => 
             inst.id === editingId ? { ...inst, ...currentInstruction } as Instruction : inst
-        ));
+        );
     } else {
         const newInst: Instruction = {
             id: Date.now().toString(),
@@ -96,29 +144,42 @@ const AiSettings: React.FC = () => {
             content: currentInstruction.content!,
             isActive: true
         };
-        setInstructions(prev => [...prev, newInst]);
+        updatedInstructions = [...instructions, newInst];
     }
+
+    setInstructions(updatedInstructions);
     setShowModal(false);
     setEditingId(null);
     setCurrentInstruction({ label: '', content: '', isActive: true });
+    
+    // Auto-save to DB
+    persistConfig(updatedInstructions);
   };
 
-  const openEditModal = (inst: Instruction) => {
-      setEditingId(inst.id);
-      setCurrentInstruction({ label: inst.label, content: inst.content, isActive: inst.isActive });
-      setShowModal(true);
+  const openEditModal = (instruction: Instruction) => {
+    setEditingId(instruction.id);
+    setCurrentInstruction({ 
+        label: instruction.label, 
+        content: instruction.content, 
+        isActive: instruction.isActive 
+    });
+    setShowModal(true);
   };
 
   const deleteInstruction = (id: string) => {
       if (confirm('Are you sure you want to delete this instruction block?')) {
-        setInstructions(prev => prev.filter(i => i.id !== id));
+        const updated = instructions.filter(i => i.id !== id);
+        setInstructions(updated);
+        persistConfig(updated);
       }
   };
 
   const toggleInstruction = (id: string) => {
-      setInstructions(prev => prev.map(inst => 
+      const updated = instructions.map(inst => 
         inst.id === id ? { ...inst, isActive: !inst.isActive } : inst
-      ));
+      );
+      setInstructions(updated);
+      persistConfig(updated);
   };
 
   if (loading) return <div className="p-8 text-center text-slate-500">Loading Configuration...</div>;
@@ -131,10 +192,23 @@ const AiSettings: React.FC = () => {
             <p className="text-slate-500 dark:text-slate-400">Configure your AI Sales Persona and Model.</p>
         </div>
         <button 
-            onClick={handleSaveAll}
-            className="flex items-center px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-colors shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+            onClick={handleManualSave}
+            disabled={saving}
+            className={`flex items-center px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 ${
+                saving 
+                ? 'bg-slate-100 text-slate-500 cursor-wait' 
+                : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+            }`}
         >
-            <Save size={18} className="mr-2" /> Save Changes
+            {saving ? (
+                <>
+                    <Loader2 size={18} className="mr-2 animate-spin" /> Saving...
+                </>
+            ) : (
+                <>
+                    <Save size={18} className="mr-2" /> Save Changes
+                </>
+            )}
         </button>
       </div>
 
@@ -146,8 +220,8 @@ const AiSettings: React.FC = () => {
                     <Sparkles size={24} />
                 </div>
                 <div>
-                    <h3 className="font-bold text-slate-800 dark:text-white">Model Configuration</h3>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Gemini 3 Flash via KIE API</p>
+                    <h3 className="font-bold text-slate-800 dark:text-white">API Configuration</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Access Key for KIE API</p>
                 </div>
             </div>
 
@@ -166,7 +240,81 @@ const AiSettings: React.FC = () => {
                         {showKey ? 'Hide' : 'Show'}
                     </button>
                 </div>
+                <p className="text-xs text-slate-400 mt-2">Click "Save Changes" after updating the API key.</p>
             </div>
+        </div>
+
+        {/* Model Hierarchy Section */}
+        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden p-8">
+            <div className="flex items-center space-x-3 mb-6">
+                <div className="p-2 bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 rounded-lg">
+                    <Cpu size={24} />
+                </div>
+                <div>
+                    <h3 className="font-bold text-slate-800 dark:text-white">Model Hierarchy & Fallback</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Define model priority. If the top model fails, the next one is used.</p>
+                </div>
+            </div>
+
+            <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 border border-gray-200 dark:border-slate-700 mb-4">
+                {models.length === 0 ? (
+                    <p className="text-center text-slate-400 text-sm py-4">No models configured. System will default to 'gemini-3-flash'.</p>
+                ) : (
+                    <ul className="space-y-2">
+                        {models.map((model, index) => (
+                            <li key={index} className="flex items-center justify-between bg-white dark:bg-slate-800 p-3 rounded-lg border border-gray-100 dark:border-slate-700 shadow-sm">
+                                <div className="flex items-center">
+                                    <span className="w-6 h-6 flex items-center justify-center bg-slate-100 dark:bg-slate-700 text-slate-500 text-xs font-bold rounded-full mr-3">
+                                        {index + 1}
+                                    </span>
+                                    <span className="font-mono text-sm font-medium text-slate-700 dark:text-slate-200">{model}</span>
+                                    {index === 0 && <span className="ml-3 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] uppercase font-bold rounded">Primary</span>}
+                                </div>
+                                <div className="flex items-center space-x-1">
+                                    <button 
+                                        onClick={() => moveModel(index, 'up')} 
+                                        disabled={index === 0}
+                                        className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-30"
+                                    >
+                                        <ArrowUp size={16} />
+                                    </button>
+                                    <button 
+                                        onClick={() => moveModel(index, 'down')} 
+                                        disabled={index === models.length - 1}
+                                        className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-30"
+                                    >
+                                        <ArrowDown size={16} />
+                                    </button>
+                                    <div className="w-px h-4 bg-gray-200 dark:bg-slate-700 mx-1"></div>
+                                    <button onClick={() => removeModel(index)} className="p-1 text-slate-400 hover:text-red-600">
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </div>
+
+            <div className="flex items-center space-x-2">
+                <input 
+                    type="text" 
+                    value={newModel}
+                    onChange={(e) => setNewModel(e.target.value)}
+                    placeholder="e.g. gemini-2.5-flash"
+                    className="flex-1 px-4 py-2 border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+                <button 
+                    onClick={addModel}
+                    disabled={!newModel}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-bold disabled:opacity-50"
+                >
+                    Add Model
+                </button>
+            </div>
+            <p className="text-xs text-slate-400 mt-2">
+                Common models: <code className="bg-slate-100 dark:bg-slate-900 px-1 rounded">gemini-3-flash</code>, <code className="bg-slate-100 dark:bg-slate-900 px-1 rounded">gemini-3-pro</code>, <code className="bg-slate-100 dark:bg-slate-900 px-1 rounded">gemini-2.5-flash</code>
+            </p>
         </div>
 
         {/* Instructions Section */}
@@ -178,7 +326,7 @@ const AiSettings: React.FC = () => {
                     </div>
                     <div>
                         <h3 className="font-bold text-slate-800 dark:text-white">Custom Instructions</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Define multiple rules for the AI personality.</p>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Define multiple rules for the AI personality. Auto-saves on change.</p>
                     </div>
                 </div>
                 <button 

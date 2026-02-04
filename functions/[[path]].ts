@@ -156,105 +156,125 @@ async function callInstagramApi(payload: any, token: string, version: string, db
 async function generateAiResponse(conversationHistory: any[], apiKey: string, customInstruction: string | null, db: any) {
     if (!apiKey) return "I can't think right now (Missing API Key).";
     
-    try {
-        // 1. Build Context
-        const productContext = PRODUCT_CATALOG.map(p => 
-            `- ${p.name} (ID: ${p.id}): ₹${p.price}. ${p.description}`
-        ).join('\n');
+    // Fetch models configuration or default to Gemini 3 Flash
+    const configModels = await getConfig(db, 'ai_models');
+    let models = ['gemini-3-flash'];
+    if (configModels) {
+        try {
+            const parsed = JSON.parse(configModels);
+            if (Array.isArray(parsed) && parsed.length > 0) models = parsed;
+        } catch(e) {}
+    }
 
-        const basePersona = `You are Alex, a friendly and helpful sales assistant for "Hewdes Gifts". 
-        Your goal is to have a natural conversation with the customer, answer their questions about products, and gently guide them to make a purchase.
-        
-        CATALOG DATA:
-        ${productContext}
-        
-        GUIDELINES:
-        - Be human-like, casual, and polite. Use emojis occasionally (e.g., 😊, 🎁).
-        - Don't write long paragraphs. Keep it short and chatty like a real WhatsApp/Instagram message.
-        - If they ask about a product, give the price and a detail, then ask if they want to order.
-        - If they want to buy, ask for their shipping address or guide them to the website link.
-        - NEVER mention you are an AI or a bot. Act like a person working at the shop.
-        `;
+    // 1. Build Context
+    const productContext = PRODUCT_CATALOG.map(p => 
+        `- ${p.name} (ID: ${p.id}): ₹${p.price}. ${p.description}`
+    ).join('\n');
 
-        // 2. Handle Custom Instructions (Text or JSON Array)
-        let formattedCustomInstructions = "";
-        if (customInstruction) {
-            try {
-                // Try parsing as JSON array (new format)
-                const parsed = JSON.parse(customInstruction);
-                if (Array.isArray(parsed)) {
-                    formattedCustomInstructions = parsed
-                        .filter((i: any) => i.isActive)
-                        .map((i: any) => `[${i.label.toUpperCase()}]: ${i.content}`)
-                        .join('\n\n');
-                } else {
-                    // JSON but not array? Treat as string
-                    formattedCustomInstructions = customInstruction;
-                }
-            } catch (e) {
-                // Not JSON? Treat as plain text (legacy format)
+    const basePersona = `You are Alex, a friendly and helpful sales assistant for "Hewdes Gifts". 
+    Your goal is to have a natural conversation with the customer, answer their questions about products, and gently guide them to make a purchase.
+    
+    CATALOG DATA:
+    ${productContext}
+    
+    GUIDELINES:
+    - Be human-like, casual, and polite. Use emojis occasionally (e.g., 😊, 🎁).
+    - Don't write long paragraphs. Keep it short and chatty like a real WhatsApp/Instagram message.
+    - If they ask about a product, give the price and a detail, then ask if they want to order.
+    - If they want to buy, ask for their shipping address or guide them to the website link.
+    - NEVER mention you are an AI or a bot. Act like a person working at the shop.
+    `;
+
+    // 2. Handle Custom Instructions
+    let formattedCustomInstructions = "";
+    if (customInstruction) {
+        try {
+            const parsed = JSON.parse(customInstruction);
+            if (Array.isArray(parsed)) {
+                formattedCustomInstructions = parsed
+                    .filter((i: any) => i.isActive)
+                    .map((i: any) => `[${i.label.toUpperCase()}]: ${i.content}`)
+                    .join('\n\n');
+            } else {
                 formattedCustomInstructions = customInstruction;
             }
+        } catch (e) {
+            formattedCustomInstructions = customInstruction;
         }
-
-        const finalSystemPrompt = formattedCustomInstructions 
-            ? `${basePersona}\n\nADDITIONAL INSTRUCTIONS:\n${formattedCustomInstructions}` 
-            : basePersona;
-
-        // 3. Format Messages for KIE API
-        const messages = [
-            { role: "developer", content: finalSystemPrompt }, // Using 'developer' role as per KIE docs
-            ...conversationHistory.map(m => ({
-                role: m.role === 'model' ? 'assistant' : 'user', // Map internal 'model' to 'assistant'
-                content: m.content || ""
-            }))
-        ];
-
-        // 4. Call KIE API
-        const response = await fetch(KIE_API_ENDPOINT, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                model: 'gemini-3-flash',
-                messages: messages,
-                stream: false,
-                include_thoughts: false
-            })
-        });
-
-        const data: any = await response.json();
-
-        // LOG KIE INTERACTION
-        await addSystemLog(
-            db,
-            'POST',
-            KIE_API_ENDPOINT,
-            response.status,
-            response.ok ? 'AI Response Generated' : 'AI API Error',
-            'system',
-            { 
-                model: 'gemini-3-flash',
-                input_messages_count: messages.length,
-                last_user_message: messages[messages.length - 1]?.content,
-                response: data 
-            }
-        );
-
-        if (!response.ok) {
-            console.error("KIE API Error:", data);
-            return "I'm having a little trouble checking that right now. Can you ask me again in a moment?";
-        }
-
-        return data.choices?.[0]?.message?.content || "Thinking...";
-
-    } catch (e: any) {
-        console.error("AI Generation Error:", e);
-        await addSystemLog(db, 'POST', KIE_API_ENDPOINT, 500, 'AI Network Error', 'system', { error: e.message });
-        return "I'm a bit busy right now checking stock. One sec!";
     }
+
+    const finalSystemPrompt = formattedCustomInstructions 
+        ? `${basePersona}\n\nADDITIONAL INSTRUCTIONS:\n${formattedCustomInstructions}` 
+        : basePersona;
+
+    const messages = [
+        { role: "developer", content: finalSystemPrompt }, 
+        ...conversationHistory.map(m => ({
+            role: m.role === 'model' ? 'assistant' : 'user',
+            content: m.content || ""
+        }))
+    ];
+
+    // 3. Try Models in Hierarchy
+    let lastError = null;
+    let successResponse = null;
+
+    for (const modelName of models) {
+        console.log(`[AI] Attempting generation with model: ${modelName}`);
+        
+        try {
+            const response = await fetch(KIE_API_ENDPOINT, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: modelName,
+                    messages: messages,
+                    stream: false,
+                    include_thoughts: false
+                })
+            });
+
+            const data: any = await response.json();
+
+            // Log attempt
+            await addSystemLog(
+                db,
+                'POST',
+                KIE_API_ENDPOINT,
+                response.status,
+                response.ok ? `AI Success (${modelName})` : `AI Failed (${modelName})`,
+                'system',
+                { 
+                    model: modelName,
+                    input_messages_count: messages.length,
+                    response: data 
+                }
+            );
+
+            if (response.ok) {
+                successResponse = data.choices?.[0]?.message?.content;
+                break; // Exit loop on success
+            } else {
+                lastError = data;
+                console.warn(`[AI] Model ${modelName} failed. Trying next...`);
+            }
+
+        } catch (e: any) {
+            console.error(`[AI] Network error with ${modelName}:`, e);
+            lastError = { error: e.message };
+            await addSystemLog(db, 'POST', KIE_API_ENDPOINT, 500, `AI Network Error (${modelName})`, 'system', { error: e.message });
+        }
+    }
+
+    if (successResponse) {
+        return successResponse;
+    }
+
+    console.error("All AI models failed.");
+    return "I'm a bit busy right now checking stock. One sec!";
 }
 
 // --- MESSAGE FLOW ---
@@ -428,17 +448,18 @@ export const onRequest = async (context: any) => {
 
     if (request.method === 'GET' && path === '/api/config') {
         // Return sensitive config for the admin UI to display/edit
-        // In a real production app, you might want to mask the API key
         const kieApiKey = await getConfig(db, 'kie_api_key');
         const aiInstruction = await getConfig(db, 'ai_instruction');
         const igToken = await getConfig(db, 'ig_token');
         const graphVersion = await getConfig(db, 'graph_version');
+        const aiModels = await getConfig(db, 'ai_models');
         
         return jsonResponse({
             kieApiKey: kieApiKey || '',
             aiInstruction: aiInstruction || '',
             igToken: igToken || '',
-            graphVersion: graphVersion || 'v24.0'
+            graphVersion: graphVersion || 'v24.0',
+            aiModels: aiModels ? JSON.parse(aiModels) : ['gemini-3-flash']
         });
     }
 
@@ -451,6 +472,7 @@ export const onRequest = async (context: any) => {
         // Save AI settings
         if (body.kieApiKey !== undefined) await setConfig(db, 'kie_api_key', body.kieApiKey);
         if (body.aiInstruction !== undefined) await setConfig(db, 'ai_instruction', body.aiInstruction);
+        if (body.aiModels !== undefined) await setConfig(db, 'ai_models', JSON.stringify(body.aiModels));
         
         await addSystemLog(db, 'POST', path, 200, 'Config Updated', 'system', body);
         return jsonResponse({ success: true });
