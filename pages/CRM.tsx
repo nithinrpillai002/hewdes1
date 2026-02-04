@@ -116,10 +116,19 @@ const CRM: React.FC<CRMProps> = ({ products }) => {
     }
   };
 
-  const handleDeleteConversation = (id: string, e: React.MouseEvent) => {
+  const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    
+    // UI Optimistic Delete
     setConversations(prev => prev.filter(c => c.id !== id));
     if (selectedChatId === id) setSelectedChatId(null);
+    
+    // API Call
+    try {
+        await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+    } catch (err) {
+        console.error("Failed to delete conversation", err);
+    }
   };
 
   return (

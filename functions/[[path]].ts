@@ -3,9 +3,6 @@ import { GoogleGenAI } from "@google/genai";
 
 // --- CONFIGURATION ---
 const VERIFY_TOKEN = 'hewdes_rttf0kd11o1axrmc';
-let RUNTIME_IG_TOKEN = "";
-let RUNTIME_GRAPH_VERSION = "v24.0";
-const MAX_LOGS = 100;
 
 // --- MOCK PRODUCT CATALOG ---
 const PRODUCT_CATALOG = [
@@ -55,6 +52,12 @@ async function initializeDatabase(db: any) {
                 source TEXT,
                 payload TEXT
             )
+        `),
+        db.prepare(`
+            CREATE TABLE IF NOT EXISTS app_config (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
         `)
     ]);
 }
@@ -76,20 +79,27 @@ async function addSystemLog(db: any, method: string, url: string, status: number
             source, 
             JSON.stringify(payload || {})
         ).run();
-        
-        // Cleanup old logs (keep last 100)
-        // Note: D1 doesn't strictly support nested subqueries in DELETE in all versions, simple approach:
-        // For production, run cleanup as a scheduled task.
     } catch (e) {
         console.error("Failed to write log to DB", e);
     }
 }
 
+async function getConfig(db: any, key: string) {
+    try {
+        const res = await db.prepare("SELECT value FROM app_config WHERE key = ?").bind(key).first();
+        return res ? res.value : null;
+    } catch (e) { return null; }
+}
+
+async function setConfig(db: any, key: string, value: string) {
+    await db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)").bind(key, value).run();
+}
+
 // --- INSTAGRAM API ---
 
-async function fetchInstagramProfile(igsid: string, token: string, db: any) {
+async function fetchInstagramProfile(igsid: string, token: string, version: string, db: any) {
     if (!token) return null;
-    const url = `https://graph.instagram.com/${RUNTIME_GRAPH_VERSION}/${igsid}?fields=name,username,profile_pic&access_token=${token}`;
+    const url = `https://graph.facebook.com/${version}/${igsid}?fields=name,username,profile_pic&access_token=${token}`;
     try {
         const response = await fetch(url);
         const data = await response.json();
@@ -103,12 +113,13 @@ async function fetchInstagramProfile(igsid: string, token: string, db: any) {
     }
 }
 
-async function callInstagramApi(payload: any, token: string, db: any) {
+async function callInstagramApi(payload: any, token: string, version: string, db: any) {
     if (!token) {
         await addSystemLog(db, 'POST', 'https://graph.facebook.com/...', 400, 'Missing IG Token', 'instagram', payload);
+        console.error("Missing IG Token. Please configure it in Settings.");
         return;
     }
-    const url = `https://graph.facebook.com/${RUNTIME_GRAPH_VERSION}/me/messages?access_token=${token}`;
+    const url = `https://graph.facebook.com/${version}/me/messages?access_token=${token}`;
     try {
         await fetch(url, {
             method: 'POST',
@@ -150,8 +161,14 @@ async function generateAiResponse(conversationHistory: any[], apiKey: string) {
 
 async function handleIncomingMessage(senderId: string, incomingData: any, env: any) {
     const db = env.hewdesdb;
-    const token = RUNTIME_IG_TOKEN || env.IG_ACCESS_TOKEN;
     const apiKey = env.API_KEY;
+
+    // Retrieve Token from DB for persistence (Priority: DB > Env)
+    const dbToken = await getConfig(db, 'ig_token');
+    const dbVersion = await getConfig(db, 'graph_version');
+    
+    const token = dbToken || env.IG_ACCESS_TOKEN;
+    const graphVersion = dbVersion || "v24.0";
 
     console.log(`[HANDLE] Processing message from ${senderId}`);
 
@@ -159,8 +176,7 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
     let conversation = await db.prepare("SELECT * FROM conversations WHERE igsid = ?").bind(senderId).first();
     
     if (!conversation) {
-        // Fetch Profile
-        const profileData = await fetchInstagramProfile(senderId, token, db);
+        const profileData = await fetchInstagramProfile(senderId, token, graphVersion, db);
         let profileName = `User ${senderId.slice(-4)}`;
         let profileAvatar = `https://ui-avatars.com/api/?name=User+${senderId.slice(-4)}&background=random`;
 
@@ -168,6 +184,8 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
             if (profileData.name) profileName = profileData.name;
             else if (profileData.username) profileName = profileData.username;
             if (profileData.profile_pic) profileAvatar = profileData.profile_pic;
+            
+            await addSystemLog(db, 'INFO', 'ProfileFetch', 200, `Fetched profile for ${senderId}`, 'instagram', profileData);
         }
 
         const newId = Date.now().toString();
@@ -197,22 +215,17 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
 
     // 3. AI Reply Logic
     if (!conversation.is_ai_paused && apiKey) {
-        // Fetch recent messages for context
         const { results: history } = await db.prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC").bind(conversation.id).all();
-        
         const aiText = await generateAiResponse(history, apiKey);
         
-        // Send to Instagram
-        await callInstagramApi({ recipient: { id: senderId }, message: { text: aiText } }, token, db);
+        await callInstagramApi({ recipient: { id: senderId }, message: { text: aiText } }, token, graphVersion, db);
         
-        // Store AI Message
         const aiMsgId = (Date.now() + 1).toString();
         await db.prepare(`
             INSERT INTO messages (id, conversation_id, role, content, timestamp, type, is_human_override)
             VALUES (?, ?, 'model', ?, ?, 'text', 0)
         `).bind(aiMsgId, conversation.id, aiText, Date.now()).run();
 
-        // Update Conversation Last Message
         await db.prepare(`
             UPDATE conversations SET last_message = ?, last_message_time = ? WHERE id = ?
         `).bind(aiText, Date.now(), conversation.id).run();
@@ -233,11 +246,7 @@ export const onRequest = async (context: any) => {
         return new Response(JSON.stringify({ error: "Database binding 'hewdesdb' not found." }), { status: 500 });
     }
 
-    // Ensure Tables Exist (Simple check on every request for this setup)
     await initializeDatabase(db);
-
-    // Config Init
-    if (!RUNTIME_IG_TOKEN && env.IG_ACCESS_TOKEN) RUNTIME_IG_TOKEN = env.IG_ACCESS_TOKEN;
 
     const jsonResponse = (data: any, status = 200) => {
         return new Response(JSON.stringify(data), {
@@ -266,10 +275,8 @@ export const onRequest = async (context: any) => {
     }
 
     if (request.method === 'GET' && path === '/api/conversations') {
-        // Fetch all conversations
         const { results: conversations } = await db.prepare("SELECT * FROM conversations ORDER BY last_message_time DESC").all();
         
-        // Hydrate with messages (Not efficient for huge datasets, but fine for CRM view)
         const fullConversations = await Promise.all(conversations.map(async (c: any) => {
             const { results: messages } = await db.prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC").bind(c.id).all();
             return {
@@ -300,9 +307,20 @@ export const onRequest = async (context: any) => {
 
     if (request.method === 'POST' && path === '/api/config') {
         const body: any = await request.json();
-        if (body.igToken) RUNTIME_IG_TOKEN = body.igToken;
-        if (body.graphVersion) RUNTIME_GRAPH_VERSION = body.graphVersion;
+        if (body.igToken) await setConfig(db, 'ig_token', body.igToken);
+        if (body.graphVersion) await setConfig(db, 'graph_version', body.graphVersion);
         await addSystemLog(db, 'POST', path, 200, 'Config Updated', 'system', body);
+        return jsonResponse({ success: true });
+    }
+
+    if (request.method === 'DELETE' && path.match(/\/api\/conversations\/.+/)) {
+        const id = path.split('/')[3];
+        // Hard Delete
+        await db.batch([
+            db.prepare("DELETE FROM conversations WHERE id = ?").bind(id),
+            db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(id)
+        ]);
+        await addSystemLog(db, 'DELETE', path, 200, 'Conversation Deleted', 'system', { id });
         return jsonResponse({ success: true });
     }
 
@@ -310,22 +328,25 @@ export const onRequest = async (context: any) => {
         const id = path.split('/')[3];
         const body: any = await request.json();
         
+        // Fetch config for outgoing message - Priority: DB > Env
+        const dbToken = await getConfig(db, 'ig_token');
+        const dbVersion = await getConfig(db, 'graph_version');
+        const token = dbToken || env.IG_ACCESS_TOKEN;
+        const version = dbVersion || "v24.0";
+
         const conv = await db.prepare("SELECT * FROM conversations WHERE id = ?").bind(id).first();
         
         if (conv) {
-            // Insert Message
             await db.prepare(`
                 INSERT INTO messages (id, conversation_id, role, content, timestamp, type, is_human_override)
                 VALUES (?, ?, ?, ?, ?, 'text', 1)
             `).bind(Date.now().toString(), id, body.role || 'user', body.text, Date.now()).run();
 
-            // Update Conversation
             await db.prepare(`
                 UPDATE conversations SET last_message = ?, last_message_time = ?, is_ai_paused = 1 WHERE id = ?
             `).bind(body.text, Date.now(), id).run();
 
-            // Send to IG
-            await callInstagramApi({ recipient: { id: conv.igsid }, message: { text: body.text } }, RUNTIME_IG_TOKEN, db);
+            await callInstagramApi({ recipient: { id: conv.igsid }, message: { text: body.text } }, token, version, db);
             
             return jsonResponse({ success: true });
         }
@@ -341,7 +362,6 @@ export const onRequest = async (context: any) => {
     // --- WEBHOOK ROUTES ---
 
     if (path === '/webhook/instagram') {
-        // VERIFICATION
         if (request.method === 'GET') {
             const mode = url.searchParams.get('hub.mode');
             const token = url.searchParams.get('hub.verify_token');
@@ -354,7 +374,6 @@ export const onRequest = async (context: any) => {
             return new Response('Forbidden', { status: 403 });
         }
 
-        // EVENT RECEIPT
         if (request.method === 'POST') {
             const debugInfo: any = { processed: 0 };
             try {
@@ -379,12 +398,7 @@ export const onRequest = async (context: any) => {
                 }
                 
                 await addSystemLog(db, 'POST', path, 200, 'Webhook Processed & Saved to DB', 'instagram', { count: debugInfo.processed });
-                
-                return new Response(JSON.stringify({ 
-                    status: 'EVENT_RECEIVED', 
-                    persistence: 'D1_DATABASE',
-                    processed: debugInfo.processed
-                }), { status: 200, headers: {'Content-Type': 'application/json'} });
+                return new Response(JSON.stringify({ status: 'EVENT_RECEIVED', processed: debugInfo.processed }), { status: 200 });
 
             } catch (e: any) {
                 console.error(`[WEBHOOK] Error:`, e);
