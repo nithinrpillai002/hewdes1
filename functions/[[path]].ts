@@ -120,20 +120,40 @@ async function callInstagramApi(payload: any, token: string, version: string, db
         return;
     }
     const url = `https://graph.facebook.com/${version}/me/messages?access_token=${token}`;
+    const safeLogUrl = `https://graph.facebook.com/${version}/me/messages`;
+
     try {
-        await fetch(url, {
+        const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-    } catch (e) {
+        
+        // Always capture the response body for logging
+        const data = await response.json();
+
+        await addSystemLog(
+            db, 
+            'POST', 
+            safeLogUrl, 
+            response.status, 
+            response.ok ? 'IG Message Sent' : 'IG API Error', 
+            'instagram', 
+            { 
+                request: payload, 
+                response: data 
+            }
+        );
+
+    } catch (e: any) {
         console.error("Graph API Error", e);
+        await addSystemLog(db, 'POST', safeLogUrl, 500, 'IG Network Error', 'instagram', { error: e.message, request: payload });
     }
 }
 
 // --- AI LOGIC (KIE API) ---
 
-async function generateAiResponse(conversationHistory: any[], apiKey: string, customInstruction: string | null) {
+async function generateAiResponse(conversationHistory: any[], apiKey: string, customInstruction: string | null, db: any) {
     if (!apiKey) return "I can't think right now (Missing API Key).";
     
     try {
@@ -207,6 +227,22 @@ async function generateAiResponse(conversationHistory: any[], apiKey: string, cu
 
         const data: any = await response.json();
 
+        // LOG KIE INTERACTION
+        await addSystemLog(
+            db,
+            'POST',
+            KIE_API_ENDPOINT,
+            response.status,
+            response.ok ? 'AI Response Generated' : 'AI API Error',
+            'system',
+            { 
+                model: 'gemini-3-flash',
+                input_messages_count: messages.length,
+                last_user_message: messages[messages.length - 1]?.content,
+                response: data 
+            }
+        );
+
         if (!response.ok) {
             console.error("KIE API Error:", data);
             return "I'm having a little trouble checking that right now. Can you ask me again in a moment?";
@@ -214,8 +250,9 @@ async function generateAiResponse(conversationHistory: any[], apiKey: string, cu
 
         return data.choices?.[0]?.message?.content || "Thinking...";
 
-    } catch (e) {
+    } catch (e: any) {
         console.error("AI Generation Error:", e);
+        await addSystemLog(db, 'POST', KIE_API_ENDPOINT, 500, 'AI Network Error', 'system', { error: e.message });
         return "I'm a bit busy right now checking stock. One sec!";
     }
 }
@@ -297,8 +334,8 @@ async function handleIncomingMessage(senderId: string, incomingData: any, env: a
     if (!conversation.is_ai_paused && kieApiKey) {
         const { results: history } = await db.prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC").bind(conversation.id).all();
         
-        // Pass the custom instruction from DB
-        const aiText = await generateAiResponse(history, kieApiKey, aiInstruction);
+        // Pass the custom instruction from DB, AND DB for logging
+        const aiText = await generateAiResponse(history, kieApiKey, aiInstruction, db);
         
         await callInstagramApi({ recipient: { id: senderId }, message: { text: aiText } }, token, graphVersion, db);
         
